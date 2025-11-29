@@ -77,17 +77,28 @@ pub(crate) impl Felt252Zeroable = zero_based::ZeroableImpl<felt252>;
 /// A wrapper type for non-zero values of type T.
 ///
 /// This type guarantees that the wrapped value is never zero.
-#[derive(Copy, Drop)]
 pub extern type NonZero<T>;
 
-impl NonZeroNeg<T, +Neg<T>, +TryInto<T, NonZero<T>>> of Neg<NonZero<T>> {
-    fn neg(a: NonZero<T>) -> NonZero<T> {
-        // TODO(orizi): Optimize using bounded integers.
-        let value: T = a.into();
-        let negated: T = -value;
-        negated.try_into().unwrap()
+impl NonZeroCopy<T> of Copy<NonZero<T>>;
+impl NonZeroDrop<T> of Drop<NonZero<T>>;
+
+pub(crate) mod non_zero_neg {
+    pub impl Impl<T, +Neg<T>, +TryInto<T, NonZero<T>>> of Neg<NonZero<T>> {
+        fn neg(a: NonZero<T>) -> NonZero<T> {
+            // TODO(orizi): Optimize using bounded integers.
+            let value: T = a.into();
+            let negated: T = -value;
+            negated.try_into().unwrap()
+        }
     }
 }
+
+impl NonZeroI8Neg = non_zero_neg::Impl<i8>;
+impl NonZeroI16Neg = non_zero_neg::Impl<i16>;
+impl NonZeroI32Neg = non_zero_neg::Impl<i32>;
+impl NonZeroI64Neg = non_zero_neg::Impl<i64>;
+impl NonZeroI128Neg = non_zero_neg::Impl<i128>;
+impl NonZeroFelt252Neg = non_zero_neg::Impl<felt252>;
 
 /// Represents the result of checking whether a value is zero.
 pub(crate) enum IsZeroResult<T> {
@@ -98,10 +109,10 @@ pub(crate) enum IsZeroResult<T> {
 }
 
 /// Unwraps a `NonZero<T>` to retrieve the underlying value of type `T`.
-extern fn unwrap_non_zero<T>(a: NonZero<T>) -> T nopanic;
+extern const fn unwrap_non_zero<T>(a: NonZero<T>) -> T nopanic;
 
 pub(crate) impl NonZeroIntoImpl<T> of Into<NonZero<T>, T> {
-    fn into(self: NonZero<T>) -> T nopanic {
+    const fn into(self: NonZero<T>) -> T nopanic {
         unwrap_non_zero(self)
     }
 }

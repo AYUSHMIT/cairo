@@ -57,7 +57,7 @@ foo
 //! > module_code
 struct PanicDestructable {}
 
-impl MyPanicDesruct of PanicDestruct<PanicDestructable> {
+impl MyPanicDestruct of PanicDestruct<PanicDestructable> {
     fn panic_destruct(self: PanicDestructable, ref panic: Panic) nopanic {
         let PanicDestructable { } = self;
     }
@@ -110,16 +110,18 @@ error: Capture of mutable variables in a closure is not supported
 
 //! > ==========================================================================
 
-//! > invalidated capture immutable variable
+//! > Use of captured var.
 
 //! > test_runner_name
 test_borrow_check
 
 //! > function
 fn foo(a: S) {
-    |b: u32| {
-        let _ = a.a + b;
+    || {
+        use_s(a)
     };
+
+    // TODO(ilya): Consider adding automatic destructuring of the closure before the following line
     let _ = a.a;
 }
 
@@ -127,27 +129,38 @@ fn foo(a: S) {
 foo
 
 //! > module_code
+#[derive(Drop)]
 struct S {
     a: u32,
 }
 
+extern fn use_s(s: S) nopanic;
+
 //! > semantic_diagnostics
 
 //! > lowering_diagnostics
+error: Variable was previously moved.
+ --> lib.cairo:13:13
+    let _ = a.a;
+            ^^^
+note: variable was previously used here:
+  --> lib.cairo:9:15
+        use_s(a)
+              ^
+note: Trait has no implementation in context: core::traits::Copy::<test::S>.
 
 //! > lowering
 Parameters: v0: test::S
 blk0 (root):
 Statements:
-  (v1: core::integer::u32) <- struct_destructure(v0{`a.a`})
-  (v2: {closure@lib.cairo:5:5: 5:13}) <- struct_construct(v1{`a.a`})
+  (v1: {closure@lib.cairo:8:5: 8:7}) <- struct_construct(v0{`a`})
   (v3: ()) <- struct_construct()
 End:
   Return(v3)
 
 //! > ==========================================================================
 
-//! > capture use after invalidatian.
+//! > Use of captured mutable variable.
 
 //! > test_runner_name
 test_borrow_check
@@ -185,29 +198,37 @@ error: Capture of mutable variables in a closure is not supported
 test_borrow_check
 
 //! > function
-fn foo(mut a: Array<u32>) {
+fn foo(a: Array<u32>) {
     let f = |_b: u32| {
         let _ = a.len();
     };
-    a.append(0);
-    use_f(f)
+    // Since only a snapshot of `a` is capture, we can use it while it is captured.
+    use_value(a);
+
+    use_value(f);
 }
 
 //! > function_name
 foo
 
 //! > module_code
-extern fn use_f<T>(f: T) nopanic;
+extern fn use_value<T>(f: T) nopanic;
 
 //! > semantic_diagnostics
-error: Capture of mutable variables in a closure is not supported
- --> lib.cairo:4:17
-        let _ = a.len();
-                ^
 
 //! > lowering_diagnostics
 
 //! > lowering
+Parameters: v0: core::array::Array::<core::integer::u32>
+blk0 (root):
+Statements:
+  (v1: core::array::Array::<core::integer::u32>, v2: @core::array::Array::<core::integer::u32>) <- snapshot(v0{`a`})
+  (v3: {closure@lib.cairo:3:13: 3:22}) <- struct_construct(v2{`|_b: u32| { let _ = a.len(); }`})
+  () <- test::use_value::<core::array::Array::<core::integer::u32>>(v1{`a`})
+  () <- test::use_value::<{closure@lib.cairo:3:13: 3:22}>(v3{`f`})
+  (v4: ()) <- struct_construct()
+End:
+  Return(v4)
 
 //! > ==========================================================================
 
@@ -275,14 +296,14 @@ Statements:
   (v2: {closure@lib.cairo:3:13: 3:16}, v3: @{closure@lib.cairo:3:13: 3:16}) <- snapshot(v1{`c`})
   (v4: core::felt252) <- 2
   (v5: (core::felt252,)) <- struct_construct(v4{`2`})
-  (v6: core::felt252) <- Generated core::ops::function::Fn::<{closure@lib.cairo:3:13: 3:16}, (core::felt252,)>::call(v3{`c`}, v5{`c(2)`})
+  (v6: core::felt252) <- Generated `core::ops::function::Fn::call` for {closure@lib.cairo:3:13: 3:16}(v3{`c`}, v5{`c(2)`})
   (v7: core::felt252) <- core::Felt252Add::add(v6{`y`}, v0{`x`})
 End:
   Return(v7)
 
 //! > ==========================================================================
 
-//! > Test using captured snapshoted variable after closure.
+//! > Test using captured snapshotted variable after closure.
 
 //! > test_runner_name
 test_borrow_check
@@ -318,7 +339,7 @@ Statements:
   (v7: {closure@lib.cairo:3:13: 3:16}, v8: @{closure@lib.cairo:3:13: 3:16}) <- snapshot(v6{`c`})
   (v9: core::integer::u32) <- 2
   (v10: (core::integer::u32,)) <- struct_construct(v9{`2`})
-  (v11: core::integer::u32) <- Generated core::ops::function::Fn::<{closure@lib.cairo:3:13: 3:16}, (core::integer::u32,)>::call(v8{`c`}, v10{`c(2)`})
+  (v11: core::integer::u32) <- Generated `core::ops::function::Fn::call` for {closure@lib.cairo:3:13: 3:16}(v8{`c`}, v10{`c(2)`})
   (v12: core::array::Array::<core::felt252>, v13: @core::array::Array::<core::felt252>) <- snapshot(v4{`x`})
   (v14: core::integer::u32) <- 0
   (v15: @core::felt252) <- core::ops::index::DeprecatedIndexViewImpl::<core::array::Array::<core::felt252>, core::integer::u32, @core::felt252, core::array::ArrayIndex::<core::felt252>>::index(v13{`x`}, v14{`0`})
@@ -399,3 +420,45 @@ warning[E0001]: Unused variable. Consider ignoring by prefixing with `_`.
 //! > lowering_diagnostics
 
 //! > lowering
+
+//! > ==========================================================================
+
+//! > capturing two destructables variables of the same type.
+
+//! > test_runner_name
+test_borrow_check
+
+//! > function
+fn foo(a: Destructable, b: Destructable) {
+    let c = || {
+        let Destructable { } = a;
+        let Destructable { } = b;
+    };
+    c.destruct();
+}
+
+//! > function_name
+foo
+
+//! > module_code
+struct Destructable {}
+
+impl MyDestruct of Destruct<Destructable> {
+    fn destruct(self: Destructable) nopanic {
+        let Destructable { } = self;
+    }
+}
+
+//! > semantic_diagnostics
+
+//! > lowering_diagnostics
+
+//! > lowering
+Parameters: v0: test::Destructable, v1: test::Destructable
+blk0 (root):
+Statements:
+  (v2: {closure@lib.cairo:9:13: 9:15}) <- struct_construct(v0{`a`}, v1{`b`})
+  (v3: ()) <- Generated `core::traits::Destruct::destruct` for {closure@lib.cairo:9:13: 9:15}(v2{`c`})
+  (v4: ()) <- struct_construct()
+End:
+  Return(v4)

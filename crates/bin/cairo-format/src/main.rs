@@ -1,17 +1,18 @@
-use std::fmt::Debug;
 use std::path::Path;
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use cairo_lang_formatter::{
-    CairoFormatter, CollectionsBreakingBehavior, FormatOutcome, FormatterConfig, StdinFmt,
-};
+use cairo_lang_formatter::{CairoFormatter, FormatOutcome, FormatterConfig, StdinFmt};
 use cairo_lang_utils::logging::init_logging;
 use clap::Parser;
 use colored::Colorize;
 use ignore::WalkState::Continue;
 use ignore::{DirEntry, Error, ParallelVisitor, ParallelVisitorBuilder, WalkState};
 use log::warn;
+
+#[cfg(feature = "mimalloc")]
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 /// Outputs a string to stderr if the verbose flag is true.
 fn eprintln_if_verbose(s: &str, verbose: bool) {
@@ -23,7 +24,7 @@ fn eprintln_if_verbose(s: &str, verbose: bool) {
 /// Formats a file or directory with the Cairo formatter.
 /// Exits with 0/1 if the input is formatted correctly/incorrectly.
 #[derive(Parser, Debug)]
-#[clap(version, verbatim_doc_comment)]
+#[command(version, verbatim_doc_comment)]
 struct FormatterArgs {
     /// Check mode, don't write the formatted files,
     /// just output the diff between the original and the formatted file.
@@ -39,24 +40,27 @@ struct FormatterArgs {
     #[arg(short, long, default_value_t = false)]
     print_parsing_errors: bool,
     /// Enable sorting the module level items (imports, mod definitions...).
-    #[arg(short, long, default_value_t = false)]
-    sort_mod_level_items: bool,
+    #[arg(short, long)]
+    sort_mod_level_items: Option<bool>,
     /// Controls tuple breaking behavior. Set to 'line-by-line' (default) to format each
     /// tuple item on a new line, or 'single-break-point' to keep as many items as possible on the
     /// same line (as space permits). Defaults to line-by-line.
-    #[arg(long, default_value_t = false)]
-    tuple_line_breaking: bool,
+    #[arg(long)]
+    tuple_line_breaking: Option<bool>,
     /// Controls fixed array breaking behavior. Set to 'single-break-point' (default) to format
     /// each array item on a new line, or 'line-by-line' to keep as many items as possible on the
     /// same line (as space permits). Defaults to single line.
-    #[arg(long, default_value_t = true)]
-    fixed_array_line_breaking: bool,
+    #[arg(long)]
+    fixed_array_line_breaking: Option<bool>,
+    /// Controls macro call breaking behavior.
+    #[arg(long)]
+    macro_call_breaking_behavior: Option<bool>,
     /// Enable merging of `use` items.
-    #[arg(long, default_value_t = false)]
-    merge_use_items: bool,
-    ///  Enable duplicates in `use` items.
-    #[arg(long, default_value_t = false)]
-    allow_duplicates: bool,
+    #[arg(long)]
+    merge_use_items: Option<bool>,
+    /// Enable duplicates in `use` items.
+    #[arg(long)]
+    allow_duplicates: Option<bool>,
     /// A list of files and directories to format. Use "-" for stdin.
     files: Vec<String>,
 }
@@ -197,22 +201,15 @@ fn format_stdin(args: &FormatterArgs, fmt: &CairoFormatter) -> bool {
 }
 
 fn main() -> ExitCode {
-    init_logging(log::LevelFilter::Off);
+    init_logging(tracing::Level::ERROR);
     log::info!("Starting formatting.");
 
     let args = FormatterArgs::parse();
     let config = FormatterConfig::default()
         .sort_module_level_items(args.sort_mod_level_items)
-        .tuple_breaking_behavior(if args.tuple_line_breaking {
-            CollectionsBreakingBehavior::SingleBreakPoint
-        } else {
-            CollectionsBreakingBehavior::LineByLine
-        })
-        .fixed_array_breaking_behavior(if args.fixed_array_line_breaking {
-            CollectionsBreakingBehavior::LineByLine
-        } else {
-            CollectionsBreakingBehavior::SingleBreakPoint
-        })
+        .tuple_breaking_behavior(args.tuple_line_breaking.map(Into::into))
+        .fixed_array_breaking_behavior(args.fixed_array_line_breaking.map(Into::into))
+        .macro_call_breaking_behavior(args.macro_call_breaking_behavior.map(Into::into))
         .merge_use_items(args.merge_use_items)
         .allow_duplicate_uses(args.allow_duplicates);
     let fmt = CairoFormatter::new(config);

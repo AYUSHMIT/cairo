@@ -7,7 +7,7 @@ use cairo_lang_casm::operand::{CellRef, Register};
 use cairo_lang_sierra::extensions::circuit::CircuitInfo;
 use cairo_lang_sierra::extensions::core::CoreConcreteLibfunc::{self, *};
 use cairo_lang_sierra::extensions::coupon::CouponConcreteLibfunc;
-use cairo_lang_sierra::extensions::gas::CostTokenType;
+use cairo_lang_sierra::extensions::gas::{CostTokenMap, CostTokenType};
 use cairo_lang_sierra::extensions::lib_func::{BranchSignature, OutputVarInfo, SierraApChange};
 use cairo_lang_sierra::extensions::{ConcreteLibfunc, OutputVarReferenceInfo};
 use cairo_lang_sierra::ids::ConcreteTypeId;
@@ -18,7 +18,6 @@ use cairo_lang_sierra_ap_change::core_libfunc_ap_change::{
 use cairo_lang_sierra_gas::core_libfunc_cost::{InvocationCostInfoProvider, core_libfunc_cost};
 use cairo_lang_sierra_gas::objects::ConstCost;
 use cairo_lang_sierra_type_size::TypeSizeMap;
-use cairo_lang_utils::ordered_hash_map::OrderedHashMap;
 use cairo_lang_utils::unordered_hash_map::UnorderedHashMap;
 use itertools::{Itertools, chain, zip_eq};
 use num_bigint::BigInt;
@@ -36,6 +35,7 @@ use crate::relocations::{InstructionsWithRelocations, Relocation, RelocationEntr
 
 mod array;
 mod bitwise;
+mod blake;
 mod boolean;
 mod boxing;
 mod bytes31;
@@ -49,16 +49,21 @@ mod felt252;
 mod felt252_dict;
 mod function_call;
 mod gas;
+mod gas_reserve;
 mod int;
 mod mem;
 mod misc;
 mod nullable;
 mod pedersen;
 mod poseidon;
+mod qm31;
 mod range;
 mod range_reduction;
+mod squashed_felt252_dict;
 mod starknet;
 mod structure;
+mod trace;
+mod unsafe_panic;
 
 #[cfg(test)]
 mod test_utils;
@@ -81,9 +86,9 @@ pub enum InvocationError {
     UnknownTypeData,
     #[error("Expected variable data for statement not found.")]
     UnknownVariableData,
-    #[error("An integer overflow occurred.")]
-    InvalidGenericArg,
     #[error("Invalid generic argument for libfunc.")]
+    InvalidGenericArg,
+    #[error("An integer overflow occurred.")]
     IntegerOverflow,
     #[error(transparent)]
     FrameStateError(#[from] FrameStateError),
@@ -117,7 +122,7 @@ pub struct BranchChanges {
     /// A change to the ap tracking status.
     pub ap_tracking_change: ApTrackingChange,
     /// The change to the remaining gas value in the wallet.
-    pub gas_change: OrderedHashMap<CostTokenType, i64>,
+    pub gas_change: CostTokenMap<i64>,
     /// Should the stack be cleared due to a gap between stack items.
     pub clear_old_stack: bool,
     /// The expected size of the known stack after the change.
@@ -129,7 +134,7 @@ impl BranchChanges {
     fn new<'a, ParamRef: Fn(usize) -> &'a ReferenceValue>(
         ap_change: ApChange,
         ap_tracking_change: ApTrackingChange,
-        gas_change: OrderedHashMap<CostTokenType, i64>,
+        gas_change: CostTokenMap<i64>,
         expressions: impl ExactSizeIterator<Item = ReferenceExpression>,
         branch_signature: &BranchSignature,
         prev_env: &Environment,
@@ -304,7 +309,7 @@ pub fn check_references_on_stack(refs: &[ReferenceValue]) -> Result<(), Invocati
     Ok(())
 }
 
-/// The cells per returned Sierra variables, in casm-builder vars.
+/// The cells per returned Sierra variables, in CASM-builder vars.
 type VarCells = [Var];
 /// The configuration for all Sierra variables returned from a libfunc.
 type AllVars<'a> = [&'a VarCells];
@@ -475,7 +480,7 @@ impl CompiledInvocationBuilder<'_> {
         }
     }
 
-    /// Builds a `CompiledInvocation` from a casm builder and branch extractions.
+    /// Builds a `CompiledInvocation` from a CASM builder and branch extractions.
     /// Per branch requires `(name, result_variables, target_statement_id)`.
     fn build_from_casm_builder<const BRANCH_COUNT: usize>(
         self,
@@ -491,7 +496,7 @@ impl CompiledInvocationBuilder<'_> {
         )
     }
 
-    /// Builds a `CompiledInvocation` from a casm builder and branch extractions.
+    /// Builds a `CompiledInvocation` from a CASM builder and branch extractions.
     /// Per branch requires `(name, result_variables, target_statement_id)`.
     ///
     /// `pre_instructions` - Instructions to execute before the ones created by the builder.
@@ -639,7 +644,7 @@ pub struct ProgramInfo<'a> {
     pub const_data_values: &'a dyn Fn(&ConcreteTypeId) -> Vec<BigInt>,
 }
 
-/// Given a Sierra invocation statement and concrete libfunc, creates a compiled casm representation
+/// Given a Sierra invocation statement and concrete libfunc, creates a compiled CASM representation
 /// of the Sierra statement.
 pub fn compile_invocation(
     program_info: ProgramInfo<'_>,
@@ -653,6 +658,7 @@ pub fn compile_invocation(
         CompiledInvocationBuilder { program_info, invocation, libfunc, idx, refs, environment };
     match libfunc {
         Felt252(libfunc) => felt252::build(libfunc, builder),
+        Felt252SquashedDict(libfunc) => squashed_felt252_dict::build(libfunc, builder),
         Bool(libfunc) => boolean::build(libfunc, builder),
         Cast(libfunc) => casts::build(libfunc, builder),
         Ec(libfunc) => ec::build(libfunc, builder),
@@ -683,13 +689,15 @@ pub fn compile_invocation(
         }
         Sint128(libfunc) => int::signed128::build(libfunc, builder),
         Gas(libfunc) => gas::build(libfunc, builder),
+        GasReserve(libfunc) => gas_reserve::build(libfunc, builder),
         BranchAlign(_) => misc::build_branch_align(builder),
         Array(libfunc) => array::build(libfunc, builder),
         Drop(_) => misc::build_drop(builder),
         Dup(_) => misc::build_dup(builder),
         Mem(libfunc) => mem::build(libfunc, builder),
         UnwrapNonZero(_) => misc::build_identity(builder),
-        FunctionCall(libfunc) | CouponCall(libfunc) => function_call::build(libfunc, builder),
+        FunctionCall(libfunc) | CouponCall(libfunc) => function_call::build(libfunc, builder, true),
+        DummyFunctionCall(libfunc) => function_call::build(libfunc, builder, false),
         UnconditionalJump(_) => misc::build_jump(builder),
         ApTracking(_) => misc::build_update_ap_tracking(builder),
         Box(libfunc) => boxing::build(libfunc, builder),
@@ -698,7 +706,7 @@ pub fn compile_invocation(
         Felt252Dict(libfunc) => felt252_dict::build_dict(libfunc, builder),
         Pedersen(libfunc) => pedersen::build(libfunc, builder),
         Poseidon(libfunc) => poseidon::build(libfunc, builder),
-        StarkNet(libfunc) => starknet::build(libfunc, builder),
+        Starknet(libfunc) => starknet::build(libfunc, builder),
         Nullable(libfunc) => nullable::build(libfunc, builder),
         Debug(libfunc) => debug::build(libfunc, builder),
         SnapshotTake(_) => misc::build_dup(builder),
@@ -715,6 +723,10 @@ pub fn compile_invocation(
         BoundedInt(libfunc) => int::bounded::build(libfunc, builder),
         Circuit(libfunc) => circuit::build(libfunc, builder),
         IntRange(libfunc) => range::build(libfunc, builder),
+        Blake(libfunc) => blake::build(libfunc, builder),
+        Trace(libfunc) => trace::build(libfunc, builder),
+        QM31(libfunc) => qm31::build(libfunc, builder),
+        UnsafePanic(_) => unsafe_panic::build(builder),
     }
 }
 

@@ -11,152 +11,187 @@ jobs:
   ensure-no_std:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: nightly-2024-11-23
+          toolchain: nightly-2025-11-17
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
       - run: |
           cd ensure-no_std && cargo build
 
+  syntax-codegen-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          components: rustfmt
+          toolchain: nightly-2025-11-17
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --profile=ci-dev -p cairo-lang-syntax-codegen
+
   parallel-tests:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        cmd:
-          - test --profile=ci-dev -p cairo-lang-casm --features=serde,parity-scale-codec,schemars
-          - test --profile=ci-dev -p cairo-lang-casm --no-default-features --features=serde,parity-scale-codec
-          - test --profile=ci-dev -p cairo-lang-compiler
-          - test --profile=ci-dev -p cairo-lang-debug
-          - test --profile=ci-dev -p cairo-lang-defs
-          - test --profile=ci-dev -p cairo-lang-diagnostics
-          - test --profile=ci-dev -p cairo-lang-doc
-          - test --profile=ci-dev -p cairo-lang-eq-solver
-          - test --profile=ci-dev -p cairo-lang-executable
-          - test --profile=ci-dev -p cairo-lang-filesystem
-          - test --profile=ci-dev -p cairo-lang-formatter
-          - test --profile=ci-dev -p cairo-lang-lowering
-          - test --profile=ci-dev -p cairo-lang-parser
-          - test --profile=ci-dev -p cairo-lang-plugins
-          - test --profile=ci-dev -p cairo-lang-proc-macros
-          - test --profile=ci-dev -p cairo-lang-project
-          - test --profile=ci-dev -p cairo-lang-runnable-utils
-          - test --profile=ci-dev -p cairo-lang-runner
-          - test --profile=ci-dev -p cairo-lang-semantic
-          - test --profile=ci-dev -p cairo-lang-sierra
-          - test --profile=ci-dev -p cairo-lang-sierra-ap-change
-          - test --profile=ci-dev -p cairo-lang-sierra-gas
-          - test --profile=ci-dev -p cairo-lang-sierra-generator
-          - test --profile=ci-dev -p cairo-lang-sierra-to-casm
-          - test --profile=ci-dev -p cairo-lang-sierra-type-size
-          - test --profile=ci-dev -p cairo-lang-starknet-classes
-          - test --profile=ci-dev -p cairo-lang-starknet
-          - test --profile=ci-dev -p cairo-lang-syntax
-          - test --profile=ci-dev -p cairo-lang-syntax-codegen
-          - test --profile=ci-dev -p cairo-lang-test-plugin
-          - test --profile=ci-dev -p cairo-lang-test-runner
-          - test --profile=ci-dev -p cairo-lang-test-utils
-          - test --profile=ci-dev -p cairo-lang-utils --features=serde,parity-scale-codec,schemars,testing,env_logger
-          - test --profile=ci-dev -p cairo-lang-utils --no-default-features --features=serde,parity-scale-codec
-          - test --profile=ci-dev -p cairo-lang-primitive-token
-          - test --profile=ci-dev -p tests
+        args:
+          - cairo-lang-casm --features=serde,parity-scale-codec,schemars
+          - cairo-lang-casm --no-default-features --features=serde,parity-scale-codec
+          - cairo-lang-compiler
+          - cairo-lang-debug
+          - cairo-lang-defs
+          - cairo-lang-diagnostics
+          - cairo-lang-doc
+          - cairo-lang-eq-solver
+          - cairo-lang-executable
+          - cairo-lang-executable-plugin
+          - cairo-lang-execute-utils
+          - cairo-lang-filesystem
+          - cairo-lang-formatter
+          - cairo-lang-lowering
+          - cairo-lang-parser
+          - cairo-lang-plugins
+          - cairo-lang-primitive-token
+          - cairo-lang-proc-macros
+          - cairo-lang-project
+          - cairo-lang-runnable-utils
+          - cairo-lang-runner
+          - cairo-lang-semantic
+          - cairo-lang-sierra
+          - cairo-lang-sierra-ap-change
+          - cairo-lang-sierra-gas
+          - cairo-lang-sierra-generator
+          - cairo-lang-sierra-to-casm
+          - cairo-lang-sierra-type-size
+          - cairo-lang-starknet-classes
+          - cairo-lang-starknet
+          - cairo-lang-syntax
+          - cairo-lang-test-plugin
+          - cairo-lang-test-runner
+          - cairo-lang-test-utils
+          - cairo-lang-utils --features=serde,parity-scale-codec,schemars,testing,tracing
+          - cairo-lang-utils --no-default-features --features=serde,parity-scale-codec
+          - tests
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          components: rustfmt
-          toolchain: nightly-2024-11-23
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: Install nextest
-        uses: taiki-e/install-action@nextest
+        with:
+          # Allow only the heavy 'tests' leg to upload the cache; all legs still restore it.
+          save-if: ${{ matrix.args == 'tests' }}
       # Validates that the number of commands in the matrix is equal to the number of crates in the
-      # workspace + 2 (for the crates which have multiple commands)
+      # workspace + 2 (for the crates which have multiple commands) - 1 (for the syntax-codegen-test)
       - run: |
           CRATES_COUNT=$(find {crates/*,tests}/Cargo.toml | wc -l)
           COMMANDS_COUNT=${{ strategy.job-total }}
-          if [ $((CRATES_COUNT + 2)) -ne $COMMANDS_COUNT ]; then
+          if [ $((CRATES_COUNT + 2 - 1)) -ne $COMMANDS_COUNT ]; then
             echo "CRATES_COUNT: $CRATES_COUNT"
             echo "COMMANDS_COUNT: $COMMANDS_COUNT"
-            echo "The number of commands in the matrix is not equal to the number of crates in the workspace + 2"
+            echo "The number of commands in the matrix is not equal to the number of crates in the workspace + 1"
             exit 1
           fi
       - run: |
-          cargo ${{ matrix.cmd }}
+          cargo test --profile=ci-dev -p ${{ matrix.args }}
   test:
     if: ${{ always() }}
-    needs: parallel-tests
+    needs: [parallel-tests, syntax-codegen-test]
     runs-on: ubuntu-latest
     steps:
-      - if: needs.parallel-tests.result == 'success'
+      - if: needs.parallel-tests.result == 'success' && needs.syntax-codegen-test.result == 'success'
         run: exit 0
-      - if: needs.parallel-tests.result != 'success'
+      - if: needs.parallel-tests.result != 'success' || needs.syntax-codegen-test.result != 'success'
         run: exit 1
   rustfmt:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@master
         with:
           components: rustfmt
-          toolchain: nightly-2024-11-23
+          toolchain: nightly-2025-11-17
       - uses: Swatinem/rust-cache@v2
       - run: scripts/rust_fmt.sh --check
 
-  # Checks all .cairo files in the repo are formatted correctly.
+  # Checks that all .cairo files in the repo are formatted correctly.
   cairofmt:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: scripts/cairo_fmt.sh --check
 
-  # Checks all cairo corelib tests run correctly.
-  cairotest:
+  parallel-cairo-tests:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        cmd:
+          - corelib/
+          - tests/bug_samples --starknet
+          - crates/cairo-lang-starknet/cairo_level_tests/ --starknet
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: scripts/cairo_test.sh
-      - run: scripts/starknet_test.sh
+      - run: |
+          cargo run --profile=ci-dev --bin cairo-test -- ${{ matrix.cmd }}
+  # Checks that all Cairo code tests run correctly.
+  cairotest:
+    if: ${{ always() }}
+    needs: parallel-cairo-tests
+    runs-on: ubuntu-latest
+    steps:
+      - if: needs.parallel-cairo-tests.result == 'success'
+        run: exit 0
+      - if: needs.parallel-cairo-tests.result != 'success'
+        run: exit 1
 
   # Check for unnecessary dependencies.
   udeps:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
       - name: Machete
-        uses: bnjbvr/cargo-machete@main
+        uses: bnjbvr/cargo-machete@v0.8.0
 
   clippy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@master
         with:
           components: clippy
-          toolchain: nightly-2024-11-23
+          toolchain: nightly-2025-11-17
       - uses: Swatinem/rust-cache@v2
       - run: >
           scripts/clippy.sh
 
+  taplo:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@taplo
+      - run: >
+          scripts/taplo.sh
+
   typos:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: crate-ci/typos@v1.27.0
+      - uses: actions/checkout@v6
+      - uses: crate-ci/typos@v1.37.0
 
   docs:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: nightly-2024-11-23
+          toolchain: nightly-2025-11-17
       - uses: Swatinem/rust-cache@v2
       - run: >
           scripts/docs.sh
@@ -164,7 +199,7 @@ jobs:
   sierra-updated-check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: '0'
       - run: >

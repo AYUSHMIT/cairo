@@ -5,11 +5,17 @@ use cairo_lang_defs::ids::{
     NamedLanguageElementId, SubmoduleId, TopLevelLanguageElementId, TraitFunctionId, TraitId,
 };
 use cairo_lang_diagnostics::{DiagnosticAdded, Maybe};
+use cairo_lang_filesystem::ids::SmolStrId;
 use cairo_lang_semantic::corelib::core_submodule;
-use cairo_lang_semantic::db::SemanticGroup;
 use cairo_lang_semantic::items::attribute::SemanticQueryAttrs;
-use cairo_lang_semantic::items::enm::SemanticEnumEx;
-use cairo_lang_semantic::items::imp::{ImplLongId, ImplLookupContext};
+use cairo_lang_semantic::items::enm::{EnumSemantic, SemanticEnumEx};
+use cairo_lang_semantic::items::function_with_body::FunctionWithBodySemantic;
+use cairo_lang_semantic::items::imp::{ImplLongId, ImplLookupContext, ImplSemantic};
+use cairo_lang_semantic::items::impl_alias::ImplAliasSemantic;
+use cairo_lang_semantic::items::module::ModuleSemantic;
+use cairo_lang_semantic::items::structure::StructSemantic;
+use cairo_lang_semantic::items::trt::TraitSemantic;
+use cairo_lang_semantic::keyword::SELF_PARAM_KW;
 use cairo_lang_semantic::types::{ConcreteEnumLongId, ConcreteStructLongId, get_impl_at_context};
 use cairo_lang_semantic::{
     ConcreteTraitLongId, ConcreteTypeId, GenericArgumentId, GenericParam, Mutability, Signature,
@@ -24,12 +30,12 @@ use cairo_lang_syntax::node::helpers::QueryAttrs;
 use cairo_lang_syntax::node::ids::SyntaxStablePtrId;
 use cairo_lang_syntax::node::{Terminal, TypedStablePtr, TypedSyntaxNode, ast};
 use cairo_lang_utils::ordered_hash_set::OrderedHashSet;
-use cairo_lang_utils::{Intern, LookupIntern, require, try_extract_matches};
+use cairo_lang_utils::{Intern, require, try_extract_matches};
 use itertools::zip_eq;
-use smol_str::SmolStr;
+use salsa::Database;
 use thiserror::Error;
 
-use crate::plugin::aux_data::StarkNetEventAuxData;
+use crate::plugin::aux_data::StarknetEventAuxData;
 use crate::plugin::consts::{
     ABI_ATTR, ABI_ATTR_EMBED_V0_ARG, ABI_ATTR_PER_ITEM_ARG, ACCOUNT_CONTRACT_ENTRY_POINT_SELECTORS,
     CONSTRUCTOR_ATTR, CONTRACT_ATTR, CONTRACT_ATTR_ACCOUNT_ARG, CONTRACT_STATE_NAME,
@@ -51,9 +57,9 @@ enum EventInfo {
 }
 
 /// The information of an entrypoint.
-struct EntryPointInfo {
+struct EntryPointInfo<'db> {
     /// The source of the entry point.
-    source: Source,
+    source: Source<'db>,
     /// The signature of the entry point.
     inputs: Vec<Input>,
 }
@@ -65,9 +71,9 @@ pub struct BuilderConfig {
     pub account_contract_validations: bool,
 }
 
-pub struct AbiBuilder<'a> {
+pub struct AbiBuilder<'db> {
     /// The db.
-    db: &'a dyn SemanticGroup,
+    db: &'db dyn Database,
     /// The builder configuration.
     config: BuilderConfig,
 
@@ -75,29 +81,29 @@ pub struct AbiBuilder<'a> {
     /// The constructed ABI.
     abi_items: OrderedHashSet<Item>,
 
-    /// List of type that were included abi.
+    /// List of types that were included in the abi.
     /// Used to avoid redundancy.
-    types: HashSet<TypeId>,
+    types: HashSet<TypeId<'db>>,
 
     /// A map of events that were included in the abi to their info.
     /// Used to avoid redundancy, as well as preventing enum events from repeating selectors.
-    event_info: HashMap<TypeId, EventInfo>,
+    event_info: HashMap<TypeId<'db>, EventInfo>,
 
     /// List of entry point names that were included in the abi.
     /// Used to avoid duplication.
-    entry_points: HashMap<String, EntryPointInfo>,
+    entry_points: HashMap<String, EntryPointInfo<'db>>,
 
     /// The constructor for the contract.
-    ctor: Option<EntryPointInfo>,
+    ctor: Option<EntryPointInfo<'db>>,
 
     /// Accumulated errors.
-    errors: Vec<ABIError>,
+    errors: Vec<ABIError<'db>>,
 }
-impl<'a> AbiBuilder<'a> {
+impl<'db> AbiBuilder<'db> {
     /// Creates an `AbiBuilder` from a Starknet contract module.
     pub fn from_submodule(
-        db: &'a dyn SemanticGroup,
-        submodule_id: SubmoduleId,
+        db: &'db dyn Database,
+        submodule_id: SubmoduleId<'db>,
         config: BuilderConfig,
     ) -> Maybe<Self> {
         let mut builder = Self {
@@ -116,7 +122,7 @@ impl<'a> AbiBuilder<'a> {
     }
 
     /// Returns the finalized ABI.
-    pub fn finalize(self) -> Result<Contract, ABIError> {
+    pub fn finalize(self) -> Result<Contract, ABIError<'db>> {
         if let Some(err) = self.errors.into_iter().next() {
             Err(err)
         } else {
@@ -125,19 +131,19 @@ impl<'a> AbiBuilder<'a> {
     }
 
     /// Returns the errors accumulated by the builder.
-    pub fn errors(&self) -> &[ABIError] {
+    pub fn errors(&self) -> &[ABIError<'db>] {
         &self.errors
     }
 
     /// Runs account contract validations if required.
-    fn account_contract_validations(&mut self, submodule_id: SubmoduleId) -> Maybe<()> {
+    fn account_contract_validations(&mut self, submodule_id: SubmoduleId<'db>) -> Maybe<()> {
         if !self.config.account_contract_validations {
             return Ok(());
         }
         let attrs = submodule_id.query_attr(self.db, CONTRACT_ATTR)?;
         let mut is_account_contract = false;
         for attr in attrs {
-            if attr.is_single_unnamed_arg(self.db.upcast(), CONTRACT_ATTR_ACCOUNT_ARG) {
+            if attr.is_single_unnamed_arg(self.db, CONTRACT_ATTR_ACCOUNT_ARG) {
                 is_account_contract = true;
             } else if !attr.args.is_empty() {
                 self.errors.push(ABIError::IllegalContractAttrArgs);
@@ -177,13 +183,13 @@ impl<'a> AbiBuilder<'a> {
     }
 
     /// Adds a Starknet contract module to the ABI.
-    fn process_submodule_contract(&mut self, submodule_id: SubmoduleId) -> Maybe<()> {
+    fn process_submodule_contract(&mut self, submodule_id: SubmoduleId<'db>) -> Maybe<()> {
         let mut free_functions = Vec::new();
         let mut enums = Vec::new();
         let mut structs = Vec::new();
         let mut impl_defs = Vec::new();
         let mut impl_aliases = Vec::new();
-        for item in &*self.db.module_items(ModuleId::Submodule(submodule_id))? {
+        for item in ModuleId::Submodule(submodule_id).module_data(self.db)?.items(self.db).iter() {
             match item {
                 ModuleItemId::FreeFunction(id) => free_functions.push(*id),
                 ModuleItemId::Struct(id) => structs.push(*id),
@@ -197,7 +203,7 @@ impl<'a> AbiBuilder<'a> {
         // Get storage type for later validations.
         let mut storage_type = None;
         for struct_id in structs {
-            let struct_name = struct_id.name(self.db.upcast());
+            let struct_name = struct_id.name(self.db).long(self.db);
             let concrete_struct_id =
                 ConcreteStructLongId { struct_id, generic_args: vec![] }.intern(self.db);
             let source = Source::Struct(concrete_struct_id);
@@ -266,8 +272,8 @@ impl<'a> AbiBuilder<'a> {
 
         // Add events to ABI.
         for enum_id in enums {
-            let enm_name = enum_id.name(self.db.upcast());
-            if enm_name == EVENT_TYPE_NAME && enum_id.has_attr(self.db.upcast(), EVENT_ATTR)? {
+            let enm_name = enum_id.name(self.db).long(self.db);
+            if enm_name == EVENT_TYPE_NAME && enum_id.has_attr(self.db, EVENT_ATTR)? {
                 // Get the ConcreteEnumId from the EnumId.
                 let concrete_enum_id =
                     ConcreteEnumLongId { enum_id, generic_args: vec![] }.intern(self.db);
@@ -286,26 +292,32 @@ impl<'a> AbiBuilder<'a> {
     }
 
     /// Adds an interface to the ABI.
-    fn add_interface(&mut self, source: Source, trait_id: TraitId) -> Result<(), ABIError> {
+    fn add_interface(
+        &mut self,
+        source: Source<'db>,
+        trait_id: TraitId<'db>,
+    ) -> Result<(), ABIError<'db>> {
         // Get storage type
         let generic_params = self.db.trait_generic_params(trait_id)?;
-        let [GenericParam::Type(storage_type)] = generic_params.as_slice() else {
+        let [GenericParam::Type(storage_type)] = generic_params else {
             return Err(ABIError::ExpectedOneGenericParam(source));
         };
         let storage_type = TypeLongId::GenericParameter(storage_type.id).intern(self.db);
 
-        let interface_path = trait_id.full_path(self.db.upcast());
+        let interface_path = trait_id.full_path(self.db);
         let mut items = Vec::new();
-        for function in self.db.trait_functions(trait_id).unwrap_or_default().values() {
-            let f = self.trait_function_as_abi(*function, storage_type)?;
-            self.add_entry_point(function.name(self.db.upcast()).into(), EntryPointInfo {
-                source,
-                inputs: f.inputs.clone(),
-            })?;
-            items.push(Item::Function(f));
+        if let Ok(trait_functions) = self.db.trait_functions(trait_id) {
+            for function in trait_functions.values() {
+                let f = self.trait_function_as_abi(*function, storage_type)?;
+                self.add_entry_point(
+                    function.name(self.db).to_string(self.db),
+                    EntryPointInfo { source, inputs: f.inputs.clone() },
+                )?;
+                items.push(Item::Function(f));
+            }
         }
 
-        let interface_item = Item::Interface(Interface { name: interface_path.clone(), items });
+        let interface_item = Item::Interface(Interface { name: interface_path, items });
         self.add_abi_item(interface_item, true, source)?;
 
         Ok(())
@@ -315,35 +327,37 @@ impl<'a> AbiBuilder<'a> {
     /// functions.
     fn add_non_interface_impl(
         &mut self,
-        source: Source,
-        impl_def_id: ImplDefId,
-        storage_type: TypeId,
-    ) -> Result<(), ABIError> {
+        source: Source<'db>,
+        impl_def_id: ImplDefId<'db>,
+        storage_type: TypeId<'db>,
+    ) -> Result<(), ABIError<'db>> {
         let trait_id = self.db.impl_def_trait(impl_def_id)?;
-        for function in self.db.trait_functions(trait_id).unwrap_or_default().values() {
-            let function_abi = self.trait_function_as_abi(*function, storage_type)?;
-            self.add_abi_item(Item::Function(function_abi), true, source)?;
+        if let Ok(trait_functions) = self.db.trait_functions(trait_id) {
+            for function in trait_functions.values() {
+                let function_abi = self.trait_function_as_abi(*function, storage_type)?;
+                self.add_abi_item(Item::Function(function_abi), true, source)?;
+            }
         }
 
         Ok(())
     }
 
-    /// Adds an impl of a starknet interface to the ABI.
+    /// Adds an impl of a Starknet interface to the ABI.
     /// `impl_alias_name` can override the given impl name and is used in the ABI if set.
     fn add_embedded_impl(
         &mut self,
-        source: Source,
-        impl_def_id: ImplDefId,
+        source: Source<'db>,
+        impl_def_id: ImplDefId<'db>,
         impl_alias_name: Option<String>,
-    ) -> Result<(), ABIError> {
-        let impl_name = impl_def_id.name(self.db.upcast());
+    ) -> Result<(), ABIError<'db>> {
+        let impl_name = impl_def_id.name(self.db).to_string(self.db);
 
         let trt = self.db.impl_def_concrete_trait(impl_def_id)?;
 
         let trait_id = trt.trait_id(self.db);
-        let interface_name = trait_id.full_path(self.db.upcast());
+        let interface_name = trait_id.full_path(self.db);
 
-        let abi_name = impl_alias_name.unwrap_or(impl_name.into());
+        let abi_name = impl_alias_name.unwrap_or(impl_name);
         let impl_item = Item::Impl(Imp { name: abi_name, interface_name });
         self.add_abi_item(impl_item, true, source)?;
         self.add_interface(source, trait_id)?;
@@ -354,20 +368,25 @@ impl<'a> AbiBuilder<'a> {
     /// Adds an embedded impl to the ABI.
     fn add_per_item_impl(
         &mut self,
-        impl_def_id: ImplDefId,
-        storage_type: TypeId,
-    ) -> Result<(), ABIError> {
-        for impl_function_id in self.db.impl_functions(impl_def_id).unwrap_or_default().values() {
-            self.maybe_add_function_with_body(
-                FunctionWithBodyId::Impl(*impl_function_id),
-                storage_type,
-            )?;
+        impl_def_id: ImplDefId<'db>,
+        storage_type: TypeId<'db>,
+    ) -> Result<(), ABIError<'db>> {
+        if let Ok(impl_functions) = self.db.impl_functions(impl_def_id) {
+            for impl_function_id in impl_functions.values() {
+                self.maybe_add_function_with_body(
+                    FunctionWithBodyId::Impl(*impl_function_id),
+                    storage_type,
+                )?;
+            }
         }
         Ok(())
     }
 
     /// Adds an embedded impl alias to the ABI.
-    fn add_embedded_impl_alias(&mut self, impl_alias_id: ImplAliasId) -> Result<(), ABIError> {
+    fn add_embedded_impl_alias(
+        &mut self,
+        impl_alias_id: ImplAliasId<'db>,
+    ) -> Result<(), ABIError<'db>> {
         let source = Source::ImplAlias(impl_alias_id);
         let impl_def = self.db.impl_alias_impl_def(impl_alias_id)?;
 
@@ -385,7 +404,7 @@ impl<'a> AbiBuilder<'a> {
         self.add_embedded_impl(
             source,
             impl_def,
-            Some(impl_alias_id.name(self.db.upcast()).into()),
+            Some(impl_alias_id.name(self.db).to_string(self.db)),
         )?;
 
         Ok(())
@@ -394,14 +413,14 @@ impl<'a> AbiBuilder<'a> {
     /// Adds a function to the ABI according to its attributes.
     fn maybe_add_function_with_body(
         &mut self,
-        function_with_body_id: FunctionWithBodyId,
-        storage_type: TypeId,
-    ) -> Result<(), ABIError> {
-        if function_with_body_id.has_attr(self.db.upcast(), EXTERNAL_ATTR)? {
+        function_with_body_id: FunctionWithBodyId<'db>,
+        storage_type: TypeId<'db>,
+    ) -> Result<(), ABIError<'db>> {
+        if function_with_body_id.has_attr(self.db, EXTERNAL_ATTR)? {
             self.add_function_with_body(function_with_body_id, storage_type)?;
-        } else if function_with_body_id.has_attr(self.db.upcast(), CONSTRUCTOR_ATTR)? {
+        } else if function_with_body_id.has_attr(self.db, CONSTRUCTOR_ATTR)? {
             self.add_constructor(function_with_body_id, storage_type)?;
-        } else if function_with_body_id.has_attr(self.db.upcast(), L1_HANDLER_ATTR)? {
+        } else if function_with_body_id.has_attr(self.db, L1_HANDLER_ATTR)? {
             self.add_l1_handler(function_with_body_id, storage_type)?;
         }
         Ok(())
@@ -410,10 +429,10 @@ impl<'a> AbiBuilder<'a> {
     /// Adds a function to the ABI.
     fn add_function_with_body(
         &mut self,
-        function_with_body_id: FunctionWithBodyId,
-        storage_type: TypeId,
-    ) -> Result<(), ABIError> {
-        let name: String = function_with_body_id.name(self.db.upcast()).into();
+        function_with_body_id: FunctionWithBodyId<'db>,
+        storage_type: TypeId<'db>,
+    ) -> Result<(), ABIError<'db>> {
+        let name: String = function_with_body_id.name(self.db).to_string(self.db);
         let signature = self.db.function_with_body_signature(function_with_body_id)?;
 
         let function = self.function_as_abi(&name, signature, storage_type)?;
@@ -425,18 +444,18 @@ impl<'a> AbiBuilder<'a> {
     /// Adds a constructor to the ABI.
     fn add_constructor(
         &mut self,
-        function_with_body_id: FunctionWithBodyId,
-        storage_type: TypeId,
-    ) -> Result<(), ABIError> {
+        function_with_body_id: FunctionWithBodyId<'db>,
+        storage_type: TypeId<'db>,
+    ) -> Result<(), ABIError<'db>> {
         let source = Source::Function(function_with_body_id);
         if self.ctor.is_some() {
             return Err(ABIError::MultipleConstructors(source));
         }
-        let name = function_with_body_id.name(self.db.upcast()).into();
+        let name = function_with_body_id.name(self.db).to_string(self.db);
         let signature = self.db.function_with_body_signature(function_with_body_id)?;
 
         let (inputs, state_mutability) =
-            self.get_function_signature_inputs_and_mutability(&signature, storage_type)?;
+            self.get_function_signature_inputs_and_mutability(signature, storage_type)?;
         self.ctor = Some(EntryPointInfo { source, inputs: inputs.clone() });
         require(state_mutability == StateMutability::External).ok_or(ABIError::UnexpectedType)?;
 
@@ -449,16 +468,16 @@ impl<'a> AbiBuilder<'a> {
     /// Adds an L1 handler to the ABI.
     fn add_l1_handler(
         &mut self,
-        function_with_body_id: FunctionWithBodyId,
-        storage_type: TypeId,
-    ) -> Result<(), ABIError> {
-        let name = function_with_body_id.name(self.db.upcast()).into();
+        function_with_body_id: FunctionWithBodyId<'db>,
+        storage_type: TypeId<'db>,
+    ) -> Result<(), ABIError<'db>> {
+        let name = function_with_body_id.name(self.db).to_string(self.db);
         let signature = self.db.function_with_body_signature(function_with_body_id)?;
 
         let (inputs, state_mutability) =
-            self.get_function_signature_inputs_and_mutability(&signature, storage_type)?;
+            self.get_function_signature_inputs_and_mutability(signature, storage_type)?;
 
-        let outputs = self.get_signature_outputs(&signature)?;
+        let outputs = self.get_signature_outputs(signature)?;
 
         let l1_handler_item =
             Item::L1Handler(L1Handler { name, inputs, outputs, state_mutability });
@@ -470,18 +489,18 @@ impl<'a> AbiBuilder<'a> {
     /// Inspects a free function and returns its inputs and state mutability.
     fn get_function_signature_inputs_and_mutability(
         &mut self,
-        signature: &cairo_lang_semantic::Signature,
-        storage_type: TypeId,
-    ) -> Result<(Vec<Input>, StateMutability), ABIError> {
+        signature: &cairo_lang_semantic::Signature<'db>,
+        storage_type: TypeId<'db>,
+    ) -> Result<(Vec<Input>, StateMutability), ABIError<'db>> {
         let mut params = signature.params.iter();
         let Some(first_param) = params.next() else {
             return Err(ABIError::EntrypointMustHaveSelf);
         };
-        require(first_param.name == "self").ok_or(ABIError::EntrypointMustHaveSelf)?;
+        require(first_param.name.long(self.db) == SELF_PARAM_KW)
+            .ok_or(ABIError::EntrypointMustHaveSelf)?;
         let is_ref = first_param.mutability == Mutability::Reference;
-        let expected_storage_ty = is_ref
-            .then_some(storage_type)
-            .unwrap_or_else(|| TypeLongId::Snapshot(storage_type).intern(self.db));
+        let expected_storage_ty =
+            if is_ref { storage_type } else { TypeLongId::Snapshot(storage_type).intern(self.db) };
         require(first_param.ty == expected_storage_ty).ok_or(ABIError::UnexpectedType)?;
         let state_mutability =
             if is_ref { StateMutability::External } else { StateMutability::View };
@@ -489,7 +508,7 @@ impl<'a> AbiBuilder<'a> {
         for param in params {
             self.add_type(param.ty)?;
             inputs.push(Input {
-                name: param.id.name(self.db.upcast()).into(),
+                name: param.id.name(self.db).to_string(self.db),
                 ty: param.ty.format(self.db),
             });
         }
@@ -499,8 +518,8 @@ impl<'a> AbiBuilder<'a> {
     /// Gets the output types of the given signature.
     fn get_signature_outputs(
         &mut self,
-        signature: &cairo_lang_semantic::Signature,
-    ) -> Result<Vec<Output>, ABIError> {
+        signature: &cairo_lang_semantic::Signature<'db>,
+    ) -> Result<Vec<Output>, ABIError<'db>> {
         // TODO(spapini): output refs?
         Ok(if signature.return_type.is_unit(self.db) {
             vec![]
@@ -513,10 +532,10 @@ impl<'a> AbiBuilder<'a> {
     /// Converts a TraitFunctionId to an ABI::Function.
     fn trait_function_as_abi(
         &mut self,
-        trait_function_id: TraitFunctionId,
-        storage_type: TypeId,
-    ) -> Result<Function, ABIError> {
-        let name: String = trait_function_id.name(self.db.upcast()).into();
+        trait_function_id: TraitFunctionId<'db>,
+        storage_type: TypeId<'db>,
+    ) -> Result<Function, ABIError<'db>> {
+        let name: String = trait_function_id.name(self.db).to_string(self.db);
         let signature = self.db.trait_function_signature(trait_function_id)?;
 
         self.function_as_abi(&name, signature, storage_type)
@@ -526,25 +545,29 @@ impl<'a> AbiBuilder<'a> {
     fn function_as_abi(
         &mut self,
         name: &str,
-        signature: Signature,
-        storage_type: TypeId,
-    ) -> Result<Function, ABIError> {
+        signature: &Signature<'db>,
+        storage_type: TypeId<'db>,
+    ) -> Result<Function, ABIError<'db>> {
         let (inputs, state_mutability) =
-            self.get_function_signature_inputs_and_mutability(&signature, storage_type)?;
+            self.get_function_signature_inputs_and_mutability(signature, storage_type)?;
 
-        let outputs = self.get_signature_outputs(&signature)?;
+        let outputs = self.get_signature_outputs(signature)?;
 
         Ok(Function { name: name.to_string(), inputs, outputs, state_mutability })
     }
 
     /// Adds an event to the ABI from a type with an Event derive.
-    fn add_event(&mut self, type_id: TypeId, source: Source) -> Result<(), ABIError> {
+    fn add_event(
+        &mut self,
+        type_id: TypeId<'db>,
+        source: Source<'db>,
+    ) -> Result<(), ABIError<'db>> {
         if self.event_info.contains_key(&type_id) {
             // The event was handled previously.
             return Ok(());
         }
 
-        let concrete = try_extract_matches!(type_id.lookup_intern(self.db), TypeLongId::Concrete)
+        let concrete = try_extract_matches!(type_id.long(self.db), TypeLongId::Concrete)
             .ok_or(ABIError::UnexpectedType)?;
         let (event_kind, source) = match fetch_event_data(self.db, type_id)
             .ok_or(ABIError::EventNotDerived(source))?
@@ -553,17 +576,17 @@ impl<'a> AbiBuilder<'a> {
                 let ConcreteTypeId::Struct(concrete_struct_id) = concrete else {
                     unreachable!();
                 };
-                let concrete_members = self.db.concrete_struct_members(concrete_struct_id)?;
+                let concrete_members = self.db.concrete_struct_members(*concrete_struct_id)?;
                 let event_fields = members
                     .into_iter()
                     .map(|(name, kind)| {
-                        let concrete_member = &concrete_members[&name];
+                        let concrete_member = &concrete_members[&SmolStrId::from(self.db, &name)];
                         let ty = concrete_member.ty;
                         self.add_event_field(kind, ty, name, Source::Member(concrete_member.id))
                     })
-                    .collect::<Result<_, ABIError>>()?;
+                    .collect::<Result<_, ABIError<'_>>>()?;
                 self.event_info.insert(type_id, EventInfo::Struct);
-                (EventKind::Struct { members: event_fields }, Source::Struct(concrete_struct_id))
+                (EventKind::Struct { members: event_fields }, Source::Struct(*concrete_struct_id))
             }
             EventData::Enum { variants } => {
                 let ConcreteTypeId::Enum(concrete_enum_id) = concrete else {
@@ -581,7 +604,7 @@ impl<'a> AbiBuilder<'a> {
                         Ok(())
                     }
                 };
-                let concrete_variants = self.db.concrete_enum_variants(concrete_enum_id)?;
+                let concrete_variants = self.db.concrete_enum_variants(*concrete_enum_id)?;
                 let event_fields = zip_eq(variants, concrete_variants)
                     .map(|((name, kind), concrete_variant)| {
                         let source = Source::Variant(concrete_variant.id);
@@ -599,14 +622,13 @@ impl<'a> AbiBuilder<'a> {
                                 let bad_attr = concrete_variant
                                     .concrete_enum_id
                                     .enum_id(self.db)
-                                    .stable_ptr(self.db.upcast())
-                                    .lookup(self.db.upcast())
-                                    .variants(self.db.upcast())
-                                    .elements(self.db.upcast())
-                                    .into_iter()
+                                    .stable_ptr(self.db)
+                                    .lookup(self.db)
+                                    .variants(self.db)
+                                    .elements(self.db)
                                     .find_map(|v| {
-                                        if v.name(self.db.upcast()).text(self.db.upcast()) == name {
-                                            v.find_attr(self.db.upcast(), FLAT_ATTR)
+                                        if v.name(self.db).text(self.db).long(self.db) == &name {
+                                            v.find_attr(self.db, FLAT_ATTR)
                                         } else {
                                             None
                                         }
@@ -617,9 +639,9 @@ impl<'a> AbiBuilder<'a> {
                         }
                         Ok(field)
                     })
-                    .collect::<Result<_, ABIError>>()?;
+                    .collect::<Result<_, ABIError<'_>>>()?;
                 self.event_info.insert(type_id, EventInfo::Enum(selectors));
-                (EventKind::Enum { variants: event_fields }, Source::Enum(concrete_enum_id))
+                (EventKind::Enum { variants: event_fields }, Source::Enum(*concrete_enum_id))
             }
         };
         let event_item = Item::Event(Event { name: type_id.format(self.db), kind: event_kind });
@@ -632,41 +654,40 @@ impl<'a> AbiBuilder<'a> {
     fn add_event_field(
         &mut self,
         kind: EventFieldKind,
-        ty: TypeId,
-        name: SmolStr,
-        source: Source,
-    ) -> Result<EventField, ABIError> {
+        ty: TypeId<'db>,
+        name: String,
+        source: Source<'db>,
+    ) -> Result<EventField, ABIError<'db>> {
         match kind {
             EventFieldKind::KeySerde | EventFieldKind::DataSerde => self.add_type(ty)?,
             EventFieldKind::Nested | EventFieldKind::Flat => self.add_event(ty, source)?,
         };
-        Ok(EventField { name: name.into(), ty: ty.format(self.db), kind })
+        Ok(EventField { name, ty: ty.format(self.db), kind })
     }
 
     /// Adds a type to the ABI from a TypeId.
-    fn add_type(&mut self, type_id: TypeId) -> Result<(), ABIError> {
+    fn add_type(&mut self, type_id: TypeId<'db>) -> Result<(), ABIError<'db>> {
         if !self.types.insert(type_id) {
             // The type was handled previously.
             return Ok(());
         }
 
-        match type_id.lookup_intern(self.db) {
-            TypeLongId::Concrete(concrete) => self.add_concrete_type(concrete),
+        match type_id.long(self.db) {
+            TypeLongId::Concrete(concrete) => self.add_concrete_type(concrete.clone()),
             TypeLongId::Tuple(inner_types) => {
                 for ty in inner_types {
-                    self.add_type(ty)?;
+                    self.add_type(*ty)?;
                 }
                 Ok(())
             }
-            TypeLongId::Snapshot(ty) => self.add_type(ty),
+            TypeLongId::Snapshot(ty) => self.add_type(*ty),
             TypeLongId::FixedSizeArray { type_id, .. } => {
-                self.add_type(type_id)?;
+                self.add_type(*type_id)?;
                 Ok(())
             }
             TypeLongId::Coupon(_)
             | TypeLongId::GenericParameter(_)
             | TypeLongId::Var(_)
-            | TypeLongId::TraitType(_)
             | TypeLongId::ImplType(_)
             | TypeLongId::Missing(_)
             | TypeLongId::Closure(_) => Err(ABIError::UnexpectedType),
@@ -675,7 +696,7 @@ impl<'a> AbiBuilder<'a> {
 
     /// Adds a concrete type and all inner types that it depends on to ABI.
     /// native types are skipped.
-    fn add_concrete_type(&mut self, concrete: ConcreteTypeId) -> Result<(), ABIError> {
+    fn add_concrete_type(&mut self, concrete: ConcreteTypeId<'db>) -> Result<(), ABIError<'db>> {
         // If we have Array<T>, then we might need to add the type T to the ABI.
         for generic_arg in concrete.generic_args(self.db) {
             if let GenericArgumentId::Type(type_id) = generic_arg {
@@ -702,14 +723,14 @@ impl<'a> AbiBuilder<'a> {
     /// Adds the types of struct members to the ABI, and returns them.
     fn add_and_get_struct_members(
         &mut self,
-        id: cairo_lang_semantic::ConcreteStructId,
-    ) -> Result<Vec<StructMember>, ABIError> {
+        id: cairo_lang_semantic::ConcreteStructId<'db>,
+    ) -> Result<Vec<StructMember>, ABIError<'db>> {
         self.db
             .concrete_struct_members(id)?
             .iter()
             .map(|(name, member)| {
                 self.add_type(member.ty)?;
-                Ok(StructMember { name: name.to_string(), ty: member.ty.format(self.db) })
+                Ok(StructMember { name: name.to_string(self.db), ty: member.ty.format(self.db) })
             })
             .collect()
     }
@@ -717,8 +738,8 @@ impl<'a> AbiBuilder<'a> {
     /// Adds the types of struct variants to the ABI, and returns them.
     fn add_and_get_enum_variants(
         &mut self,
-        id: cairo_lang_semantic::ConcreteEnumId,
-    ) -> Result<Vec<EnumVariant>, ABIError> {
+        id: cairo_lang_semantic::ConcreteEnumId<'db>,
+    ) -> Result<Vec<EnumVariant>, ABIError<'db>> {
         let generic_id = id.enum_id(self.db);
 
         self.db
@@ -730,9 +751,9 @@ impl<'a> AbiBuilder<'a> {
                     &self.db.variant_semantic(generic_id, *variant_id)?,
                 )?;
                 self.add_type(variant.ty)?;
-                Ok(EnumVariant { name: name.to_string(), ty: variant.ty.format(self.db) })
+                Ok(EnumVariant { name: name.to_string(self.db), ty: variant.ty.format(self.db) })
             })
-            .collect::<Result<Vec<_>, ABIError>>()
+            .collect::<Result<Vec<_>, ABIError<'_>>>()
     }
 
     /// Adds an item to the ABI.
@@ -741,8 +762,8 @@ impl<'a> AbiBuilder<'a> {
         &mut self,
         item: Item,
         prevent_dups: bool,
-        source: Source,
-    ) -> Result<(), ABIError> {
+        source: Source<'db>,
+    ) -> Result<(), ABIError<'db>> {
         if let Some((name, inputs)) = match &item {
             Item::Function(item) => Some((item.name.to_string(), item.inputs.clone())),
             Item::Constructor(item) => Some((item.name.to_string(), item.inputs.clone())),
@@ -764,8 +785,8 @@ impl<'a> AbiBuilder<'a> {
     fn insert_abi_item(
         &mut self,
         item: Item,
-        prevent_dups: Option<Source>,
-    ) -> Result<(), ABIError> {
+        prevent_dups: Option<Source<'db>>,
+    ) -> Result<(), ABIError<'db>> {
         let description = match &item {
             Item::Function(item) => format!("Function '{}'", item.name),
             Item::Constructor(item) => format!("Constructor '{}'", item.name),
@@ -777,17 +798,19 @@ impl<'a> AbiBuilder<'a> {
             Item::Impl(item) => format!("Impl '{}'", item.name),
         };
         let already_existed = !self.abi_items.insert(item);
-        if already_existed {
-            if let Some(source) = prevent_dups {
-                return Err(ABIError::InvalidDuplicatedItem { description, source_ptr: source });
-            }
+        if already_existed && let Some(source) = prevent_dups {
+            return Err(ABIError::InvalidDuplicatedItem { description, source_ptr: source });
         }
 
         Ok(())
     }
 
     /// Adds an entry point name to the set of names, to track unsupported duplication.
-    fn add_entry_point(&mut self, name: String, info: EntryPointInfo) -> Result<(), ABIError> {
+    fn add_entry_point(
+        &mut self,
+        name: String,
+        info: EntryPointInfo<'db>,
+    ) -> Result<(), ABIError<'db>> {
         let source_ptr = info.source;
         if self.entry_points.insert(name.clone(), info).is_some() {
             return Err(ABIError::DuplicateEntryPointName { name, source_ptr });
@@ -797,27 +820,29 @@ impl<'a> AbiBuilder<'a> {
 }
 
 /// Checks whether the impl is marked with #[abi(embed_v0)].
-fn is_impl_abi_embed(db: &dyn SemanticGroup, imp: ImplDefId) -> Maybe<bool> {
+fn is_impl_abi_embed<'db>(db: &'db dyn Database, imp: ImplDefId<'db>) -> Maybe<bool> {
     imp.has_attr_with_arg(db, ABI_ATTR, ABI_ATTR_EMBED_V0_ARG)
 }
 
 /// Checks whether the impl is marked with `#[abi(per_item)]`.
-fn is_impl_abi_per_item(db: &dyn SemanticGroup, imp: ImplDefId) -> Maybe<bool> {
+fn is_impl_abi_per_item<'db>(db: &'db dyn Database, imp: ImplDefId<'db>) -> Maybe<bool> {
     imp.has_attr_with_arg(db, ABI_ATTR, ABI_ATTR_PER_ITEM_ARG)
 }
 
 /// Fetch the event data for the given type. Returns None if the given event type doesn't derive
 /// `starknet::Event` by using the `derive` attribute.
-fn fetch_event_data(db: &dyn SemanticGroup, event_type_id: TypeId) -> Option<EventData> {
-    let starknet_module = core_submodule(db, "starknet");
+fn fetch_event_data<'db>(db: &'db dyn Database, event_type_id: TypeId<'db>) -> Option<EventData> {
+    let starknet_module = core_submodule(db, SmolStrId::from(db, "starknet"));
     // `starknet::event`.
     let event_module = try_extract_matches!(
-        db.module_item_by_name(starknet_module, "event".into()).unwrap().unwrap(),
+        db.module_item_by_name(starknet_module, SmolStrId::from(db, "event")).unwrap().unwrap(),
         ModuleItemId::Submodule
     )?;
     // `starknet::event::Event`.
     let event_trait_id = try_extract_matches!(
-        db.module_item_by_name(ModuleId::Submodule(event_module), "Event".into()).unwrap().unwrap(),
+        db.module_item_by_name(ModuleId::Submodule(event_module), SmolStrId::from(db, "Event"))
+            .unwrap()
+            .unwrap(),
         ModuleItemId::Trait
     )?;
     // `starknet::event::Event<ThisEvent>`.
@@ -827,81 +852,85 @@ fn fetch_event_data(db: &dyn SemanticGroup, event_type_id: TypeId) -> Option<Eve
     }
     .intern(db);
     // The impl of `starknet::event::Event<ThisEvent>`.
-    let event_impl =
-        get_impl_at_context(db.upcast(), ImplLookupContext::default(), concrete_trait_id, None)
-            .ok()?;
-    let concrete_event_impl =
-        try_extract_matches!(event_impl.lookup_intern(db), ImplLongId::Concrete)?;
+    let event_impl = get_impl_at_context(
+        db,
+        ImplLookupContext::new_from_type(event_type_id, db).intern(db),
+        concrete_trait_id,
+        None,
+    )
+    .ok()?;
+
+    let concrete_event_impl = try_extract_matches!(event_impl.long(db), ImplLongId::Concrete)?;
     let impl_def_id = concrete_event_impl.impl_def_id(db);
 
     // Attempt to extract the event data from the aux data from the impl generation.
-    let module_file = impl_def_id.module_file_id(db.upcast());
-    let all_aux_data = db.module_generated_file_aux_data(module_file.0).ok()?;
-    let aux_data = all_aux_data.get(module_file.1.0)?.as_ref()?;
-    Some(aux_data.0.as_any().downcast_ref::<StarkNetEventAuxData>()?.event_data.clone())
+    let module_file = impl_def_id.module_id(db);
+    let all_aux_data = module_file.module_data(db).ok()?.generated_file_aux_data(db);
+    let aux_data = all_aux_data.get(&impl_def_id.stable_ptr(db).untyped().file_id(db))?.as_ref()?;
+    Some(aux_data.0.as_any().downcast_ref::<StarknetEventAuxData>()?.event_data.clone())
 }
 
 #[derive(Error, Debug)]
-pub enum ABIError {
+pub enum ABIError<'db> {
     #[error("Semantic error")]
     SemanticError,
     #[error("Event must be an enum.")]
-    EventMustBeEnum(Source),
+    EventMustBeEnum(Source<'db>),
     #[error("`starknet::Event` variant marked with `#[flat]` must be an enum.")]
-    EventFlatVariantMustBeEnum(ast::Attribute),
+    EventFlatVariantMustBeEnum(ast::Attribute<'db>),
     #[error("Event must have no generic parameters.")]
-    EventWithGenericParams(Source),
+    EventWithGenericParams(Source<'db>),
     #[error("Event type must derive `starknet::Event`.")]
-    EventNotDerived(Source),
+    EventNotDerived(Source<'db>),
     #[error("Event `{event}` has duplicate selector `{selector}`.")]
-    EventSelectorDuplication { event: String, selector: String, source_ptr: Source },
+    EventSelectorDuplication { event: String, selector: String, source_ptr: Source<'db> },
     #[error("Interfaces must have exactly one generic parameter.")]
-    ExpectedOneGenericParam(Source),
+    ExpectedOneGenericParam(Source<'db>),
     #[error("Contracts must have only one constructor.")]
-    MultipleConstructors(Source),
+    MultipleConstructors(Source<'db>),
     #[error("Contracts must have a Storage struct.")]
     NoStorage,
     #[error("Contracts must have only one Storage struct.")]
-    MultipleStorages(Source),
+    MultipleStorages(Source<'db>),
     #[error("Got unexpected type.")]
     UnexpectedType,
     #[error("Entrypoints must have a self first param.")]
     EntrypointMustHaveSelf,
-    #[error("An embedded impl must be an impl of a trait marked with #[starknet::interface].")]
-    EmbeddedImplMustBeInterface(Source),
+    #[error("An embedded impl must be an impl of a trait marked with #[{INTERFACE_ATTR}].")]
+    EmbeddedImplMustBeInterface(Source<'db>),
     #[error("Embedded impls must be annotated with #[starknet::embeddable].")]
-    EmbeddedImplNotEmbeddable(Source),
+    EmbeddedImplNotEmbeddable(Source<'db>),
     #[error(
         "An impl marked with #[abi(per_item)] can't be of a trait marked with \
-         #[starknet::interface].\n    Consider using #[abi(embed_v0)] instead, or use a \
+         #[{INTERFACE_ATTR}].\n    Consider using #[abi(embed_v0)] instead, or use a \
          non-interface trait."
     )]
-    ContractInterfaceImplCannotBePerItem(Source),
+    ContractInterfaceImplCannotBePerItem(Source<'db>),
     #[error(
         "Invalid duplicated item: {description} is used twice in the same contract. This is not \
          supported."
     )]
-    InvalidDuplicatedItem { description: String, source_ptr: Source },
+    InvalidDuplicatedItem { description: String, source_ptr: Source<'db> },
     #[error("Duplicate entry point: '{name}'. This is not currently supported.")]
-    DuplicateEntryPointName { name: String, source_ptr: Source },
+    DuplicateEntryPointName { name: String, source_ptr: Source<'db> },
     #[error("Only supported argument for #[starknet::contract] is `account` or nothing.")]
     IllegalContractAttrArgs,
     #[error(
         "`{selector}` is a reserved entry point name for account contracts only (marked with \
          `#[starknet::contract(account)]`)."
     )]
-    EntryPointSupportedOnlyOnAccountContract { selector: String, source_ptr: Source },
+    EntryPointSupportedOnlyOnAccountContract { selector: String, source_ptr: Source<'db> },
     #[error("`{selector}` entry point must exist for account contracts.")]
     EntryPointMissingForAccountContract { selector: String },
     #[error("`{VALIDATE_DEPLOY_ENTRY_POINT_SELECTOR}` entry point must match the constructor.")]
-    ValidateDeployMismatchingConstructor(Source),
+    ValidateDeployMismatchingConstructor(Source<'db>),
 }
-impl ABIError {
-    pub fn location(&self, db: &dyn SemanticGroup) -> Option<SyntaxStablePtrId> {
+impl<'db> ABIError<'db> {
+    pub fn location(&self, db: &'db dyn Database) -> Option<SyntaxStablePtrId<'db>> {
         // TODO(orizi): Add more error locations.
         match self {
             ABIError::SemanticError => None,
-            ABIError::EventFlatVariantMustBeEnum(attr) => Some(attr.stable_ptr().untyped()),
+            ABIError::EventFlatVariantMustBeEnum(attr) => Some(attr.stable_ptr(db).untyped()),
             ABIError::NoStorage => None,
             ABIError::UnexpectedType => None,
             ABIError::EntrypointMustHaveSelf => None,
@@ -924,7 +953,7 @@ impl ABIError {
         }
     }
 }
-impl From<DiagnosticAdded> for ABIError {
+impl<'db> From<DiagnosticAdded> for ABIError<'db> {
     fn from(_: DiagnosticAdded) -> Self {
         ABIError::SemanticError
     }
@@ -932,27 +961,27 @@ impl From<DiagnosticAdded> for ABIError {
 
 /// The source of an ABI item, used for error reporting.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Source {
-    Function(FunctionWithBodyId),
-    Impl(ImplDefId),
-    ImplAlias(ImplAliasId),
-    Struct(cairo_lang_semantic::ConcreteStructId),
-    Member(cairo_lang_defs::ids::MemberId),
-    Enum(cairo_lang_semantic::ConcreteEnumId),
-    Variant(cairo_lang_defs::ids::VariantId),
-    Trait(TraitId),
+pub enum Source<'db> {
+    Function(FunctionWithBodyId<'db>),
+    Impl(ImplDefId<'db>),
+    ImplAlias(ImplAliasId<'db>),
+    Struct(cairo_lang_semantic::ConcreteStructId<'db>),
+    Member(cairo_lang_defs::ids::MemberId<'db>),
+    Enum(cairo_lang_semantic::ConcreteEnumId<'db>),
+    Variant(cairo_lang_defs::ids::VariantId<'db>),
+    Trait(TraitId<'db>),
 }
-impl Source {
-    fn location(&self, db: &dyn SemanticGroup) -> SyntaxStablePtrId {
+impl<'db> Source<'db> {
+    fn location(&self, db: &'db dyn Database) -> SyntaxStablePtrId<'db> {
         match self {
-            Source::Function(id) => id.untyped_stable_ptr(db.upcast()),
-            Source::Impl(id) => id.untyped_stable_ptr(db.upcast()),
-            Source::ImplAlias(id) => id.untyped_stable_ptr(db.upcast()),
-            Source::Struct(id) => id.struct_id(db).untyped_stable_ptr(db.upcast()),
-            Source::Member(id) => id.untyped_stable_ptr(db.upcast()),
-            Source::Enum(id) => id.enum_id(db).untyped_stable_ptr(db.upcast()),
-            Source::Variant(id) => id.untyped_stable_ptr(db.upcast()),
-            Source::Trait(id) => id.untyped_stable_ptr(db.upcast()),
+            Source::Function(id) => id.untyped_stable_ptr(db),
+            Source::Impl(id) => id.untyped_stable_ptr(db),
+            Source::ImplAlias(id) => id.untyped_stable_ptr(db),
+            Source::Struct(id) => id.struct_id(db).untyped_stable_ptr(db),
+            Source::Member(id) => id.untyped_stable_ptr(db),
+            Source::Enum(id) => id.enum_id(db).untyped_stable_ptr(db),
+            Source::Variant(id) => id.untyped_stable_ptr(db),
+            Source::Trait(id) => id.untyped_stable_ptr(db),
         }
     }
 }

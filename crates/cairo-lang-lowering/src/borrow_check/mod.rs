@@ -3,36 +3,34 @@
 mod test;
 
 use cairo_lang_defs::ids::TraitFunctionId;
-use cairo_lang_diagnostics::{DiagnosticNote, Maybe};
-use cairo_lang_semantic::corelib::{destruct_trait_fn, panic_destruct_trait_fn};
+use cairo_lang_diagnostics::{DiagnosticNote, Diagnostics};
+use cairo_lang_semantic::corelib::CorelibSemantic;
 use cairo_lang_semantic::items::functions::{GenericFunctionId, ImplGenericFunctionId};
+use cairo_lang_utils::Intern;
 use cairo_lang_utils::unordered_hash_map::UnorderedHashMap;
-use cairo_lang_utils::{Intern, LookupIntern};
 use itertools::{Itertools, zip_eq};
+use salsa::Database;
 
 use self::analysis::{Analyzer, StatementLocation};
 pub use self::demand::Demand;
 use self::demand::{AuxCombine, DemandReporter};
-use crate::blocks::Blocks;
 use crate::borrow_check::analysis::BackAnalysis;
-use crate::db::LoweringGroup;
 use crate::diagnostic::LoweringDiagnosticKind::*;
-use crate::diagnostic::{LoweringDiagnostics, LoweringDiagnosticsBuilder};
+use crate::diagnostic::{LoweringDiagnostic, LoweringDiagnostics, LoweringDiagnosticsBuilder};
 use crate::ids::{FunctionId, LocationId, SemanticFunctionIdEx};
-use crate::{BlockId, FlatLowered, MatchInfo, Statement, VarRemapping, VarUsage, VariableId};
+use crate::{BlockId, Lowered, MatchInfo, Statement, VarRemapping, VarUsage, VariableId};
 
 pub mod analysis;
 pub mod demand;
 
-pub type BorrowCheckerDemand = Demand<VariableId, LocationId, PanicState>;
-pub struct BorrowChecker<'a> {
-    db: &'a dyn LoweringGroup,
-    diagnostics: &'a mut LoweringDiagnostics,
-    lowered: &'a FlatLowered,
-    success: Maybe<()>,
-    potential_destruct_calls: PotentialDestructCalls,
-    destruct_fn: TraitFunctionId,
-    panic_destruct_fn: TraitFunctionId,
+pub type BorrowCheckerDemand<'db> = Demand<VariableId, LocationId<'db>, PanicState>;
+pub struct BorrowChecker<'db, 'mt, 'r> {
+    db: &'db dyn Database,
+    diagnostics: &'mt mut LoweringDiagnostics<'db>,
+    lowered: &'r Lowered<'db>,
+    potential_destruct_calls: PotentialDestructCalls<'db>,
+    destruct_fn: TraitFunctionId<'db>,
+    panic_destruct_fn: TraitFunctionId<'db>,
     is_panic_destruct_fn: bool,
 }
 
@@ -57,16 +55,16 @@ impl AuxCombine for PanicState {
     }
 }
 
-// Represents the item that caused the triggered the need for a drop.
+// Represents the item that caused the need for a drop.
 #[derive(Copy, Clone, Debug)]
-pub enum DropPosition {
+pub enum DropPosition<'db> {
     // The trigger is a call to a panicable function.
-    Panic(LocationId),
+    Panic(LocationId<'db>),
     // The trigger is a divergence in control flow.
-    Diverge(LocationId),
+    Diverge(LocationId<'db>),
 }
-impl DropPosition {
-    fn as_note(self, db: &dyn LoweringGroup) -> DiagnosticNote {
+impl<'db> DropPosition<'db> {
+    fn enrich_as_notes(self, db: &'db dyn Database, notes: &mut Vec<DiagnosticNote<'db>>) {
         let (text, location) = match self {
             Self::Panic(location) => {
                 ("the variable needs to be dropped due to the potential panic here", location)
@@ -75,29 +73,32 @@ impl DropPosition {
                 ("the variable needs to be dropped due to the divergence here", location)
             }
         };
-        DiagnosticNote::with_location(
+        let location = location.long(db);
+        notes.push(DiagnosticNote::with_location(
             text.into(),
-            location.lookup_intern(db).stable_location.diagnostic_location(db.upcast()),
-        )
+            location.stable_location.span_in_file(db),
+        ));
+        notes.extend(location.notes.clone());
     }
 }
 
-impl DemandReporter<VariableId, PanicState> for BorrowChecker<'_> {
+impl<'db, 'mt> DemandReporter<VariableId, PanicState> for BorrowChecker<'db, 'mt, '_> {
     // Note that for in BorrowChecker `IntroducePosition` is used to pass the cause of
     // the drop.
-    type IntroducePosition = (Option<DropPosition>, BlockId);
-    type UsePosition = LocationId;
+    type IntroducePosition = (Option<DropPosition<'db>>, BlockId);
+    type UsePosition = LocationId<'db>;
 
     fn drop_aux(
         &mut self,
-        (opt_drop_position, block_id): (Option<DropPosition>, BlockId),
+        (opt_drop_position, block_id): (Option<DropPosition<'db>>, BlockId),
         var_id: VariableId,
         panic_state: PanicState,
     ) {
         let var = &self.lowered.variables[var_id];
-        let Err(drop_err) = var.droppable.clone() else {
+        let Err(drop_err) = var.info.droppable.clone() else {
             return;
         };
+        let db = self.db;
         let mut add_called_fn = |impl_id, function| {
             self.potential_destruct_calls.entry(block_id).or_default().push(
                 cairo_lang_semantic::FunctionLongId {
@@ -109,11 +110,11 @@ impl DemandReporter<VariableId, PanicState> for BorrowChecker<'_> {
                         generic_args: vec![],
                     },
                 }
-                .intern(self.db)
-                .lowered(self.db),
+                .intern(db)
+                .lowered(db),
             );
         };
-        let destruct_err = match var.destruct_impl.clone() {
+        let destruct_err = match var.info.destruct_impl.clone() {
             Ok(impl_id) => {
                 add_called_fn(impl_id, self.destruct_fn);
                 return;
@@ -121,7 +122,7 @@ impl DemandReporter<VariableId, PanicState> for BorrowChecker<'_> {
             Err(err) => err,
         };
         let panic_destruct_err = if matches!(panic_state, PanicState::EndsWithPanic) {
-            match var.panic_destruct_impl.clone() {
+            match var.info.panic_destruct_impl.clone() {
                 Ok(impl_id) => {
                     add_called_fn(impl_id, self.panic_destruct_fn);
                     return;
@@ -132,73 +133,78 @@ impl DemandReporter<VariableId, PanicState> for BorrowChecker<'_> {
             None
         };
 
-        let mut location = var.location.lookup_intern(self.db);
+        let mut location = var.location.long(db).clone();
         if let Some(drop_position) = opt_drop_position {
-            location = location.with_note(drop_position.as_note(self.db));
+            drop_position.enrich_as_notes(db, &mut location.notes);
         }
-        let semantic_db = self.db.upcast();
-        self.success = Err(self.diagnostics.report_by_location(
+        self.diagnostics.report_by_location(
             location
-                .with_note(DiagnosticNote::text_only(drop_err.format(semantic_db)))
-                .with_note(DiagnosticNote::text_only(destruct_err.format(semantic_db)))
+                .with_note(DiagnosticNote::text_only(drop_err.format(db)))
+                .with_note(DiagnosticNote::text_only(destruct_err.format(db)))
                 .maybe_with_note(
-                    panic_destruct_err
-                        .map(|err| DiagnosticNote::text_only(err.format(semantic_db))),
+                    panic_destruct_err.map(|err| DiagnosticNote::text_only(err.format(db))),
                 ),
             VariableNotDropped { drop_err, destruct_err },
-        ));
+        );
     }
 
-    fn dup(&mut self, position: LocationId, var_id: VariableId, next_usage_position: LocationId) {
+    fn dup(
+        &mut self,
+        position: LocationId<'db>,
+        var_id: VariableId,
+        next_usage_position: LocationId<'db>,
+    ) {
         let var = &self.lowered.variables[var_id];
-        if let Err(inference_error) = var.copyable.clone() {
-            self.success = Err(self.diagnostics.report_by_location(
+        if let Err(inference_error) = var.info.copyable.clone() {
+            self.diagnostics.report_by_location(
                 next_usage_position
-                    .lookup_intern(self.db)
+                    .long(self.db)
+                    .clone()
                     .add_note_with_location(self.db, "variable was previously used here", position)
-                    .with_note(DiagnosticNote::text_only(inference_error.format(self.db.upcast()))),
+                    .with_note(DiagnosticNote::text_only(inference_error.format(self.db))),
                 VariableMoved { inference_error },
-            ));
+            );
         }
     }
 }
 
-impl Analyzer<'_> for BorrowChecker<'_> {
-    type Info = BorrowCheckerDemand;
+impl<'db, 'mt> Analyzer<'db, '_> for BorrowChecker<'db, 'mt, '_> {
+    type Info = BorrowCheckerDemand<'db>;
 
     fn visit_stmt(
         &mut self,
         info: &mut Self::Info,
         (block_id, _): StatementLocation,
-        stmt: &Statement,
+        stmt: &Statement<'db>,
     ) {
         info.variables_introduced(self, stmt.outputs(), (None, block_id));
         match stmt {
             Statement::Call(stmt) => {
-                if let Ok(signature) = stmt.function.signature(self.db) {
-                    if signature.panicable {
-                        // Be prepared to panic here.
-                        let panic_demand = BorrowCheckerDemand {
-                            aux: PanicState::EndsWithPanic,
-                            ..Default::default()
-                        };
-                        let location = (Some(DropPosition::Panic(stmt.location)), block_id);
-                        *info = BorrowCheckerDemand::merge_demands(
-                            &[(panic_demand, location), (info.clone(), location)],
-                            self,
-                        );
-                    }
+                if let Ok(signature) = stmt.function.signature(self.db)
+                    && signature.panicable
+                {
+                    // Be prepared to panic here.
+                    let panic_demand = BorrowCheckerDemand {
+                        aux: PanicState::EndsWithPanic,
+                        ..Default::default()
+                    };
+                    let location = (Some(DropPosition::Panic(stmt.location)), block_id);
+                    *info = BorrowCheckerDemand::merge_demands(
+                        &[(panic_demand, location), (info.clone(), location)],
+                        self,
+                    );
                 }
             }
             Statement::Desnap(stmt) => {
                 let var = &self.lowered.variables[stmt.output];
-                if let Err(inference_error) = var.copyable.clone() {
-                    self.success = Err(self.diagnostics.report_by_location(
-                        var.location.lookup_intern(self.db).with_note(DiagnosticNote::text_only(
-                            inference_error.format(self.db.upcast()),
-                        )),
+                if let Err(inference_error) = var.info.copyable.clone() {
+                    self.diagnostics.report_by_location(
+                        var.location
+                            .long(self.db)
+                            .clone()
+                            .with_note(DiagnosticNote::text_only(inference_error.format(self.db))),
                         DesnappingANonCopyableType { inference_error },
-                    ));
+                    );
                 }
             }
             _ => {}
@@ -214,7 +220,7 @@ impl Analyzer<'_> for BorrowChecker<'_> {
         info: &mut Self::Info,
         _statement_location: StatementLocation,
         _target_block_id: BlockId,
-        remapping: &VarRemapping,
+        remapping: &VarRemapping<'db>,
     ) {
         info.apply_remapping(
             self,
@@ -227,7 +233,7 @@ impl Analyzer<'_> for BorrowChecker<'_> {
     fn merge_match(
         &mut self,
         (block_id, _): StatementLocation,
-        match_info: &MatchInfo,
+        match_info: &MatchInfo<'db>,
         infos: impl Iterator<Item = Self::Info>,
     ) -> Self::Info {
         let infos: Vec<_> = infos.collect();
@@ -249,7 +255,7 @@ impl Analyzer<'_> for BorrowChecker<'_> {
     fn info_from_return(
         &mut self,
         _statement_location: StatementLocation,
-        vars: &[VarUsage],
+        vars: &[VarUsage<'db>],
     ) -> Self::Info {
         let mut info = if self.is_panic_destruct_fn {
             BorrowCheckerDemand { aux: PanicState::EndsWithPanic, ..Default::default() }
@@ -267,7 +273,7 @@ impl Analyzer<'_> for BorrowChecker<'_> {
     fn info_from_panic(
         &mut self,
         _statement_location: StatementLocation,
-        data: &VarUsage,
+        data: &VarUsage<'db>,
     ) -> Self::Info {
         let mut info = BorrowCheckerDemand { aux: PanicState::EndsWithPanic, ..Default::default() };
         info.variables_used(self, std::iter::once((&data.var_id, data.location)));
@@ -276,28 +282,36 @@ impl Analyzer<'_> for BorrowChecker<'_> {
 }
 
 /// The possible destruct calls per block.
-pub type PotentialDestructCalls = UnorderedHashMap<BlockId, Vec<FunctionId>>;
+pub type PotentialDestructCalls<'db> = UnorderedHashMap<BlockId, Vec<FunctionId<'db>>>;
+
+/// The borrow checker result.
+#[derive(Eq, PartialEq, Debug, Default, salsa::Update)]
+pub struct BorrowCheckResult<'db> {
+    /// The possible destruct calls per block.
+    pub block_extra_calls: PotentialDestructCalls<'db>,
+    /// The diagnostics generated during borrow checking.
+    pub diagnostics: Diagnostics<'db, LoweringDiagnostic<'db>>,
+}
 
 /// Report borrow checking diagnostics.
 /// Returns the potential destruct function calls per block.
-pub fn borrow_check(
-    db: &dyn LoweringGroup,
+pub fn borrow_check<'db>(
+    db: &'db dyn Database,
     is_panic_destruct_fn: bool,
-    lowered: &mut FlatLowered,
-) -> PotentialDestructCalls {
+    lowered: &'db Lowered<'db>,
+) -> BorrowCheckResult<'db> {
     if lowered.blocks.has_root().is_err() {
         return Default::default();
     }
     let mut diagnostics = LoweringDiagnostics::default();
-    diagnostics.extend(std::mem::take(&mut lowered.diagnostics));
-    let destruct_fn = destruct_trait_fn(db.upcast());
-    let panic_destruct_fn = panic_destruct_trait_fn(db.upcast());
+    let info = db.core_info();
+    let destruct_fn = info.destruct_fn;
+    let panic_destruct_fn = info.panic_destruct_fn;
 
     let checker = BorrowChecker {
         db,
         diagnostics: &mut diagnostics,
         lowered,
-        success: Ok(()),
         potential_destruct_calls: Default::default(),
         destruct_fn,
         panic_destruct_fn,
@@ -311,13 +325,42 @@ pub fn borrow_check(
         (None, BlockId::root()),
     );
     let block_extra_calls = analysis.analyzer.potential_destruct_calls;
-    let success = analysis.analyzer.success;
-    assert!(root_demand.finalize(), "Undefined variable should not happen at this stage");
 
-    if let Err(diag_added) = success {
-        lowered.blocks = Blocks::new_errored(diag_added);
+    let finalize_res = root_demand.finalize();
+    // If there are errors in the lowering phase, there may be undefined variables (e.g., due to
+    // using a moved variable). Skip the following assert in that case.
+    if !lowered.diagnostics.has_errors() {
+        assert!(finalize_res, "Undefined variable should not happen at this stage");
     }
 
-    lowered.diagnostics = diagnostics.build();
-    block_extra_calls
+    BorrowCheckResult { block_extra_calls, diagnostics: diagnostics.build() }
+}
+
+/// Borrow check the params of the function are panic destruct, as this function may have a gas
+/// withdrawal.
+pub fn borrow_check_possible_withdraw_gas<'db>(
+    db: &'db dyn Database,
+    location_id: LocationId<'db>,
+    lowered: &Lowered<'db>,
+    diagnostics: &mut LoweringDiagnostics<'db>,
+) {
+    let info = db.core_info();
+    let destruct_fn = info.destruct_fn;
+    let panic_destruct_fn = info.panic_destruct_fn;
+    let mut checker = BorrowChecker {
+        db,
+        diagnostics,
+        lowered,
+        potential_destruct_calls: Default::default(),
+        destruct_fn,
+        panic_destruct_fn,
+        is_panic_destruct_fn: false,
+    };
+    let position = (
+        Some(DropPosition::Panic(location_id.with_auto_generation_note(db, "withdraw_gas"))),
+        BlockId::root(),
+    );
+    for param in &lowered.parameters {
+        checker.drop_aux(position, *param, PanicState::EndsWithPanic);
+    }
 }

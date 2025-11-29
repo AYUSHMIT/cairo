@@ -8,7 +8,7 @@ fn foo(y: felt252) -> felt252 {
     let mut x = 5;
     while x != 0 {
         x = x - 1;
-    };
+    }
     x
 }
 
@@ -30,7 +30,7 @@ Parameters: v0: core::felt252
 blk0 (root):
 Statements:
   (v1: core::felt252) <- 5
-  (v3: core::felt252, v2: ()) <- test::foo[expr12](v1)
+  (v3: core::felt252, v2: ()) <- test::foo[51-95](v1)
 End:
   Return(v3)
 
@@ -39,32 +39,35 @@ Final lowering:
 Parameters: v0: core::RangeCheck, v1: core::gas::GasBuiltin, v2: core::felt252
 blk0 (root):
 Statements:
-  (v3: core::felt252) <- 5
-  (v4: core::RangeCheck, v5: core::gas::GasBuiltin, v6: core::panics::PanicResult::<(core::felt252, ())>) <- test::foo[expr12](v0, v1, v3)
+  (v3: core::RangeCheck, v4: core::gas::GasBuiltin, v5: core::panics::PanicResult::<(core::felt252, ())>) <- test::foo[51-95]{5, }(v0, v1)
 End:
-  Match(match_enum(v6) {
-    PanicResult::Ok(v7) => blk1,
-    PanicResult::Err(v8) => blk2,
+  Match(match_enum(v5) {
+    PanicResult::Ok(v6) => blk1,
+    PanicResult::Err(v7) => blk2,
   })
 
 blk1:
 Statements:
-  (v9: core::felt252, v10: ()) <- struct_destructure(v7)
+  (v8: core::gas::GasBuiltin) <- core::gas::redeposit_gas(v4)
+  (v9: core::felt252, v10: ()) <- struct_destructure(v6)
   (v11: (core::felt252,)) <- struct_construct(v9)
   (v12: core::panics::PanicResult::<(core::felt252,)>) <- PanicResult::Ok(v11)
 End:
-  Return(v4, v5, v12)
+  Return(v3, v8, v12)
 
 blk2:
 Statements:
-  (v13: core::panics::PanicResult::<(core::felt252,)>) <- PanicResult::Err(v8)
+  (v13: core::panics::PanicResult::<(core::felt252,)>) <- PanicResult::Err(v7)
 End:
-  Return(v4, v5, v13)
+  Return(v3, v4, v13)
 
 
 Generated loop lowering for source location:
-    while x != 0 {
-    ^************^
+      while x != 0 {
+ _____^
+|         x = x - 1;
+|     }
+|_____^
 
 Parameters: v0: core::felt252
 blk0 (root):
@@ -83,20 +86,15 @@ blk1:
 Statements:
   (v8: core::felt252) <- 1
   (v9: core::felt252) <- core::Felt252Sub::sub(v1, v8)
-  (v11: core::felt252, v10: ()) <- test::foo[expr12](v9)
+  (v11: core::felt252, v10: ()) <- test::foo[51-95](v9)
 End:
-  Goto(blk3, {v11 -> v14, v10 -> v13})
+  Return(v11, v10)
 
 blk2:
 Statements:
-  (v15: ()) <- struct_construct()
+  (v13: ()) <- struct_construct()
 End:
-  Goto(blk3, {v1 -> v14, v15 -> v13})
-
-blk3:
-Statements:
-End:
-  Return(v14, v13)
+  Return(v1, v13)
 
 
 Final lowering:
@@ -119,30 +117,28 @@ End:
 
 blk2:
 Statements:
-  (v8: ()) <- struct_construct()
-  (v9: (core::felt252, ())) <- struct_construct(v2, v8)
-  (v10: core::panics::PanicResult::<(core::felt252, ())>) <- PanicResult::Ok(v9)
+  (v8: core::gas::GasBuiltin) <- core::gas::redeposit_gas(v4)
+  (v9: ()) <- struct_construct()
+  (v10: (core::felt252, ())) <- struct_construct(v2, v9)
+  (v11: core::panics::PanicResult::<(core::felt252, ())>) <- PanicResult::Ok(v10)
 End:
-  Return(v3, v4, v10)
+  Return(v3, v8, v11)
 
 blk3:
 Statements:
-  (v11: core::felt252) <- 1
-  (v12: core::felt252) <- core::felt252_sub(v2, v11)
-  (v13: core::RangeCheck, v14: core::gas::GasBuiltin, v15: core::panics::PanicResult::<(core::felt252, ())>) <- test::foo[expr12](v3, v4, v12)
+  (v12: core::gas::GasBuiltin) <- core::gas::redeposit_gas(v4)
+  (v13: core::felt252) <- 1
+  (v14: core::felt252) <- core::felt252_sub(v2, v13)
+  (v15: core::RangeCheck, v16: core::gas::GasBuiltin, v17: core::panics::PanicResult::<(core::felt252, ())>) <- test::foo[51-95](v3, v12, v14)
 End:
-  Return(v13, v14, v15)
+  Return(v15, v16, v17)
 
 blk4:
 Statements:
-  (v16: core::array::Array::<core::felt252>) <- core::array::array_new::<core::felt252>()
-  (v17: core::felt252) <- 375233589013918064796019
-  (v18: core::array::Array::<core::felt252>) <- core::array::array_append::<core::felt252>(v16, v17)
-  (v19: core::panics::Panic) <- struct_construct()
-  (v20: (core::panics::Panic, core::array::Array::<core::felt252>)) <- struct_construct(v19, v18)
-  (v21: core::panics::PanicResult::<(core::felt252, ())>) <- PanicResult::Err(v20)
+  (v18: (core::panics::Panic, core::array::Array::<core::felt252>)) <- core::panic_with_const_felt252::<375233589013918064796019>()
+  (v19: core::panics::PanicResult::<(core::felt252, ())>) <- PanicResult::Err(v18)
 End:
-  Return(v5, v6, v21)
+  Return(v5, v6, v19)
 
 //! > ==========================================================================
 
@@ -156,7 +152,7 @@ fn foo(ref arr: Array<felt252>, mut x: felt252) -> felt252 {
     while let true = (x != 0) {
         x = x - 1;
         break;
-    };
+    }
     x
 }
 
@@ -177,7 +173,7 @@ Main:
 Parameters: v0: core::array::Array::<core::felt252>, v1: core::felt252
 blk0 (root):
 Statements:
-  (v3: core::felt252, v2: ()) <- test::foo[expr12](v1)
+  (v3: core::felt252, v2: ()) <- test::foo[61-133](v1)
 End:
   Return(v0, v3)
 
@@ -206,8 +202,11 @@ End:
 
 
 Generated loop lowering for source location:
-    while let true = (x != 0) {
-    ^*************************^
+      while let true = (x != 0) {
+ _____^
+| ...
+|     }
+|_____^
 
 Parameters: v0: core::felt252
 blk0 (root):
@@ -276,7 +275,7 @@ fn foo() -> felt252 {
     let mut y = 0;
     while let MyEnum::A(x) = a() {
         y = y + x
-    };
+    }
     y = y + 1;
     return y;
 }
@@ -304,7 +303,7 @@ Parameters:
 blk0 (root):
 Statements:
   (v0: core::felt252) <- 0
-  (v2: core::felt252, v1: ()) <- test::foo[expr8](v0)
+  (v2: core::felt252, v1: ()) <- test::foo[41-100](v0)
   (v3: core::felt252) <- 1
   (v4: core::felt252) <- core::Felt252Add::add(v2, v3)
 End:
@@ -315,34 +314,37 @@ Final lowering:
 Parameters: v0: core::RangeCheck, v1: core::gas::GasBuiltin
 blk0 (root):
 Statements:
-  (v2: core::felt252) <- 0
-  (v3: core::RangeCheck, v4: core::gas::GasBuiltin, v5: core::panics::PanicResult::<(core::felt252, ())>) <- test::foo[expr8](v0, v1, v2)
+  (v2: core::RangeCheck, v3: core::gas::GasBuiltin, v4: core::panics::PanicResult::<(core::felt252, ())>) <- test::foo[41-100]{0, }(v0, v1)
 End:
-  Match(match_enum(v5) {
-    PanicResult::Ok(v6) => blk1,
-    PanicResult::Err(v7) => blk2,
+  Match(match_enum(v4) {
+    PanicResult::Ok(v5) => blk1,
+    PanicResult::Err(v6) => blk2,
   })
 
 blk1:
 Statements:
-  (v8: core::felt252, v9: ()) <- struct_destructure(v6)
+  (v7: core::gas::GasBuiltin) <- core::gas::redeposit_gas(v3)
+  (v8: core::felt252, v9: ()) <- struct_destructure(v5)
   (v10: core::felt252) <- 1
   (v11: core::felt252) <- core::felt252_add(v8, v10)
   (v12: (core::felt252,)) <- struct_construct(v11)
   (v13: core::panics::PanicResult::<(core::felt252,)>) <- PanicResult::Ok(v12)
 End:
-  Return(v3, v4, v13)
+  Return(v2, v7, v13)
 
 blk2:
 Statements:
-  (v14: core::panics::PanicResult::<(core::felt252,)>) <- PanicResult::Err(v7)
+  (v14: core::panics::PanicResult::<(core::felt252,)>) <- PanicResult::Err(v6)
 End:
-  Return(v3, v4, v14)
+  Return(v2, v3, v14)
 
 
 Generated loop lowering for source location:
-    while let MyEnum::A(x) = a() {
-    ^****************************^
+      while let MyEnum::A(x) = a() {
+ _____^
+|         y = y + x
+|     }
+|_____^
 
 Parameters: v0: core::felt252
 blk0 (root):
@@ -356,37 +358,33 @@ End:
 
 blk1:
 Statements:
-  (v2: core::felt252) <- core::Felt252Add::add(v0, v1)
-  (v4: core::felt252, v3: ()) <- test::foo[expr8](v2)
+  (v4: core::felt252) <- core::Felt252Add::add(v0, v1)
+  (v6: core::felt252, v5: ()) <- test::foo[41-100](v4)
 End:
-  Goto(blk6, {v4 -> v6, v3 -> v5})
+  Return(v6, v5)
 
 blk2:
 Statements:
+  (v2: ()) <- struct_construct()
 End:
-  Goto(blk5, {})
+  Goto(blk4, {})
 
 blk3:
 Statements:
+  (v3: ()) <- struct_construct()
 End:
-  Goto(blk5, {})
+  Goto(blk4, {})
 
 blk4:
 Statements:
 End:
-  Match(match test::a() {
-  })
+  Goto(blk5, {})
 
 blk5:
 Statements:
   (v7: ()) <- struct_construct()
 End:
-  Goto(blk6, {v0 -> v6, v7 -> v5})
-
-blk6:
-Statements:
-End:
-  Return(v6, v5)
+  Return(v0, v7)
 
 
 Final lowering:
@@ -410,36 +408,35 @@ End:
 
 blk2:
 Statements:
-  (v8: core::felt252) <- core::felt252_add(v2, v7)
-  (v9: core::RangeCheck, v10: core::gas::GasBuiltin, v11: core::panics::PanicResult::<(core::felt252, ())>) <- test::foo[expr8](v3, v4, v8)
+  (v8: core::gas::GasBuiltin) <- core::gas::redeposit_gas(v4)
+  (v9: core::felt252) <- core::felt252_add(v2, v7)
+  (v10: core::RangeCheck, v11: core::gas::GasBuiltin, v12: core::panics::PanicResult::<(core::felt252, ())>) <- test::foo[41-100](v3, v8, v9)
 End:
-  Return(v9, v10, v11)
+  Return(v10, v11, v12)
 
 blk3:
 Statements:
+  (v13: core::gas::GasBuiltin) <- core::gas::redeposit_gas(v4)
 End:
-  Goto(blk5, {})
+  Goto(blk5, {v13 -> v14})
 
 blk4:
 Statements:
+  (v15: core::gas::GasBuiltin) <- core::gas::redeposit_gas(v4)
 End:
-  Goto(blk5, {})
+  Goto(blk5, {v15 -> v14})
 
 blk5:
 Statements:
-  (v12: ()) <- struct_construct()
-  (v13: (core::felt252, ())) <- struct_construct(v2, v12)
-  (v14: core::panics::PanicResult::<(core::felt252, ())>) <- PanicResult::Ok(v13)
+  (v16: ()) <- struct_construct()
+  (v17: (core::felt252, ())) <- struct_construct(v2, v16)
+  (v18: core::panics::PanicResult::<(core::felt252, ())>) <- PanicResult::Ok(v17)
 End:
-  Return(v3, v4, v14)
+  Return(v3, v14, v18)
 
 blk6:
 Statements:
-  (v15: core::array::Array::<core::felt252>) <- core::array::array_new::<core::felt252>()
-  (v16: core::felt252) <- 375233589013918064796019
-  (v17: core::array::Array::<core::felt252>) <- core::array::array_append::<core::felt252>(v15, v16)
-  (v18: core::panics::Panic) <- struct_construct()
-  (v19: (core::panics::Panic, core::array::Array::<core::felt252>)) <- struct_construct(v18, v17)
+  (v19: (core::panics::Panic, core::array::Array::<core::felt252>)) <- core::panic_with_const_felt252::<375233589013918064796019>()
   (v20: core::panics::PanicResult::<(core::felt252, ())>) <- PanicResult::Err(v19)
 End:
   Return(v5, v6, v20)

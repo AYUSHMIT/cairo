@@ -2,6 +2,7 @@ use std::ops::Shl;
 
 use cairo_lang_sierra::extensions::ap_tracking::ApTrackingConcreteLibfunc;
 use cairo_lang_sierra::extensions::array::ArrayConcreteLibfunc;
+use cairo_lang_sierra::extensions::blake::BlakeConcreteLibfunc;
 use cairo_lang_sierra::extensions::boolean::BoolConcreteLibfunc;
 use cairo_lang_sierra::extensions::bounded_int::{
     BoundedIntConcreteLibfunc, BoundedIntDivRemAlgorithm,
@@ -22,6 +23,7 @@ use cairo_lang_sierra::extensions::felt252_dict::{
     Felt252DictConcreteLibfunc, Felt252DictEntryConcreteLibfunc,
 };
 use cairo_lang_sierra::extensions::gas::{BuiltinCostsType, CostTokenType, GasConcreteLibfunc};
+use cairo_lang_sierra::extensions::gas_reserve::GasReserveConcreteLibfunc;
 use cairo_lang_sierra::extensions::int::signed::{SintConcrete, SintTraits};
 use cairo_lang_sierra::extensions::int::signed128::Sint128Concrete;
 use cairo_lang_sierra::extensions::int::unsigned::{UintConcrete, UintTraits};
@@ -34,8 +36,9 @@ use cairo_lang_sierra::extensions::mem::MemConcreteLibfunc;
 use cairo_lang_sierra::extensions::nullable::NullableConcreteLibfunc;
 use cairo_lang_sierra::extensions::pedersen::PedersenConcreteLibfunc;
 use cairo_lang_sierra::extensions::poseidon::PoseidonConcreteLibfunc;
+use cairo_lang_sierra::extensions::qm31::QM31Concrete;
 use cairo_lang_sierra::extensions::range::IntRangeConcreteLibfunc;
-use cairo_lang_sierra::extensions::starknet::StarkNetConcreteLibfunc;
+use cairo_lang_sierra::extensions::starknet::StarknetConcreteLibfunc;
 use cairo_lang_sierra::extensions::starknet::testing::TestingConcreteLibfunc;
 use cairo_lang_sierra::extensions::structure::StructConcreteLibfunc;
 use cairo_lang_sierra::ids::ConcreteTypeId;
@@ -108,6 +111,7 @@ pub fn core_libfunc_ap_change<InfoProvider: InvocationApChangeInfoProvider>(
         },
         Box(libfunc) => match libfunc {
             BoxConcreteLibfunc::Into(_) => vec![ApChange::Known(1)],
+            BoxConcreteLibfunc::LocalInto(_) => vec![ApChange::Known(2)],
             BoxConcreteLibfunc::Unbox(_) => vec![ApChange::Known(0)],
             BoxConcreteLibfunc::ForwardSnapshot(_) => vec![ApChange::Known(0)],
         },
@@ -146,7 +150,7 @@ pub fn core_libfunc_ap_change<InfoProvider: InvocationApChangeInfoProvider>(
         },
         Ec(libfunc) => match libfunc {
             EcConcreteLibfunc::IsZero(_) => vec![ApChange::Known(0), ApChange::Known(0)],
-            EcConcreteLibfunc::Neg(_) => vec![ApChange::Known(0)],
+            EcConcreteLibfunc::Neg(_) | EcConcreteLibfunc::NegNz(_) => vec![ApChange::Known(0)],
             EcConcreteLibfunc::StateAdd(_) => vec![ApChange::Known(9)],
             EcConcreteLibfunc::TryNew(_) => vec![ApChange::Known(6), ApChange::Known(6)],
             EcConcreteLibfunc::StateFinalize(_) => vec![ApChange::Known(11), ApChange::Known(3)],
@@ -170,6 +174,9 @@ pub fn core_libfunc_ap_change<InfoProvider: InvocationApChangeInfoProvider>(
             }
             Felt252Concrete::IsZero(_) => vec![ApChange::Known(0), ApChange::Known(0)],
         },
+        Felt252SquashedDict(_) => {
+            vec![ApChange::Known(0)]
+        }
         FunctionCall(libfunc) | CouponCall(libfunc) => {
             vec![ApChange::FunctionCall(libfunc.function.id.clone())]
         }
@@ -194,7 +201,12 @@ pub fn core_libfunc_ap_change<InfoProvider: InvocationApChangeInfoProvider>(
                     |token_type| info_provider.token_usages(token_type),
                 ))]
             }
-            GasConcreteLibfunc::GetAvailableGas(_) => vec![ApChange::Known(0)],
+            GasConcreteLibfunc::GetAvailableGas(_) => {
+                vec![ApChange::Known(0)]
+            }
+            GasConcreteLibfunc::GetUnspentGas(_) => {
+                vec![ApChange::Known(BuiltinCostsType::cost_computation_steps(false, |_| 2) + 1)]
+            }
             GasConcreteLibfunc::BuiltinWithdrawGas(_) => {
                 let cost_computation_ap_change: usize =
                     BuiltinCostsType::cost_computation_steps(true, |token_type| {
@@ -206,6 +218,12 @@ pub fn core_libfunc_ap_change<InfoProvider: InvocationApChangeInfoProvider>(
                 ]
             }
             GasConcreteLibfunc::GetBuiltinCosts(_) => vec![ApChange::Known(3)],
+        },
+        GasReserve(libfunc) => match libfunc {
+            GasReserveConcreteLibfunc::Create(_) => {
+                vec![ApChange::Known(2), ApChange::Known(3)]
+            }
+            GasReserveConcreteLibfunc::Utilize(_) => vec![ApChange::Known(0)],
         },
         Uint8(libfunc) => uint_ap_change(libfunc),
         Uint16(libfunc) => uint_ap_change(libfunc),
@@ -249,7 +267,6 @@ pub fn core_libfunc_ap_change<InfoProvider: InvocationApChangeInfoProvider>(
             Sint128Concrete::Const(_) | Sint128Concrete::ToFelt252(_) => {
                 vec![ApChange::Known(0)]
             }
-            Sint128Concrete::IsZero(_) => vec![ApChange::Known(0), ApChange::Known(0)],
             Sint128Concrete::Operation(_) => {
                 vec![ApChange::Known(3), ApChange::Known(4), ApChange::Known(4)]
             }
@@ -283,7 +300,8 @@ pub fn core_libfunc_ap_change<InfoProvider: InvocationApChangeInfoProvider>(
         Struct(libfunc) => match libfunc {
             StructConcreteLibfunc::Construct(_)
             | StructConcreteLibfunc::Deconstruct(_)
-            | StructConcreteLibfunc::SnapshotDeconstruct(_) => {
+            | StructConcreteLibfunc::SnapshotDeconstruct(_)
+            | StructConcreteLibfunc::BoxedDeconstruct(_) => {
                 vec![ApChange::Known(0)]
             }
         },
@@ -297,46 +315,47 @@ pub fn core_libfunc_ap_change<InfoProvider: InvocationApChangeInfoProvider>(
         Poseidon(libfunc) => match libfunc {
             PoseidonConcreteLibfunc::HadesPermutation(_) => vec![ApChange::Known(0)],
         },
-        StarkNet(libfunc) => match libfunc {
-            StarkNetConcreteLibfunc::ClassHashConst(_)
-            | StarkNetConcreteLibfunc::ContractAddressConst(_) => vec![ApChange::Known(0)],
+        Starknet(libfunc) => match libfunc {
+            StarknetConcreteLibfunc::ClassHashConst(_)
+            | StarknetConcreteLibfunc::ContractAddressConst(_) => vec![ApChange::Known(0)],
 
-            StarkNetConcreteLibfunc::ClassHashTryFromFelt252(_)
-            | StarkNetConcreteLibfunc::ContractAddressTryFromFelt252(_)
-            | StarkNetConcreteLibfunc::StorageAddressTryFromFelt252(_) => {
+            StarknetConcreteLibfunc::ClassHashTryFromFelt252(_)
+            | StarknetConcreteLibfunc::ContractAddressTryFromFelt252(_)
+            | StarknetConcreteLibfunc::StorageAddressTryFromFelt252(_) => {
                 vec![ApChange::Known(5), ApChange::Known(6)]
             }
-            StarkNetConcreteLibfunc::ClassHashToFelt252(_)
-            | StarkNetConcreteLibfunc::ContractAddressToFelt252(_)
-            | StarkNetConcreteLibfunc::StorageAddressToFelt252(_) => vec![ApChange::Known(0)],
-            StarkNetConcreteLibfunc::StorageBaseAddressConst(_) => vec![ApChange::Known(0)],
-            StarkNetConcreteLibfunc::StorageBaseAddressFromFelt252(_) => {
+            StarknetConcreteLibfunc::ClassHashToFelt252(_)
+            | StarknetConcreteLibfunc::ContractAddressToFelt252(_)
+            | StarknetConcreteLibfunc::StorageAddressToFelt252(_) => vec![ApChange::Known(0)],
+            StarknetConcreteLibfunc::StorageBaseAddressConst(_) => vec![ApChange::Known(0)],
+            StarknetConcreteLibfunc::StorageBaseAddressFromFelt252(_) => {
                 vec![ApChange::Known(7)]
             }
-            StarkNetConcreteLibfunc::StorageAddressFromBase(_) => vec![ApChange::Known(0)],
-            StarkNetConcreteLibfunc::StorageAddressFromBaseAndOffset(_) => vec![ApChange::Known(0)],
-            StarkNetConcreteLibfunc::CallContract(_)
-            | StarkNetConcreteLibfunc::StorageRead(_)
-            | StarkNetConcreteLibfunc::StorageWrite(_)
-            | StarkNetConcreteLibfunc::EmitEvent(_)
-            | StarkNetConcreteLibfunc::GetBlockHash(_)
-            | StarkNetConcreteLibfunc::GetExecutionInfo(_)
-            | StarkNetConcreteLibfunc::GetExecutionInfoV2(_)
-            | StarkNetConcreteLibfunc::Deploy(_)
-            | StarkNetConcreteLibfunc::Keccak(_)
-            | StarkNetConcreteLibfunc::Sha256ProcessBlock(_)
-            | StarkNetConcreteLibfunc::LibraryCall(_)
-            | StarkNetConcreteLibfunc::ReplaceClass(_)
-            | StarkNetConcreteLibfunc::SendMessageToL1(_)
-            | StarkNetConcreteLibfunc::Secp256(_)
-            | StarkNetConcreteLibfunc::GetClassHashAt(_) => {
+            StarknetConcreteLibfunc::StorageAddressFromBase(_) => vec![ApChange::Known(0)],
+            StarknetConcreteLibfunc::StorageAddressFromBaseAndOffset(_) => vec![ApChange::Known(0)],
+            StarknetConcreteLibfunc::CallContract(_)
+            | StarknetConcreteLibfunc::StorageRead(_)
+            | StarknetConcreteLibfunc::StorageWrite(_)
+            | StarknetConcreteLibfunc::EmitEvent(_)
+            | StarknetConcreteLibfunc::GetBlockHash(_)
+            | StarknetConcreteLibfunc::GetExecutionInfo(_)
+            | StarknetConcreteLibfunc::GetExecutionInfoV2(_)
+            | StarknetConcreteLibfunc::Deploy(_)
+            | StarknetConcreteLibfunc::Keccak(_)
+            | StarknetConcreteLibfunc::Sha256ProcessBlock(_)
+            | StarknetConcreteLibfunc::LibraryCall(_)
+            | StarknetConcreteLibfunc::ReplaceClass(_)
+            | StarknetConcreteLibfunc::SendMessageToL1(_)
+            | StarknetConcreteLibfunc::Secp256(_)
+            | StarknetConcreteLibfunc::GetClassHashAt(_)
+            | StarknetConcreteLibfunc::MetaTxV0(_) => {
                 vec![ApChange::Known(2), ApChange::Known(2)]
             }
-            StarkNetConcreteLibfunc::Testing(libfunc) => match libfunc {
+            StarknetConcreteLibfunc::Testing(libfunc) => match libfunc {
                 TestingConcreteLibfunc::Cheatcode(_) => vec![ApChange::Known(2)],
             },
-            StarkNetConcreteLibfunc::Sha256StateHandleInit(_) => vec![ApChange::Known(0)],
-            StarkNetConcreteLibfunc::Sha256StateHandleDigest(_) => vec![ApChange::Known(0)],
+            StarknetConcreteLibfunc::Sha256StateHandleInit(_) => vec![ApChange::Known(0)],
+            StarknetConcreteLibfunc::Sha256StateHandleDigest(_) => vec![ApChange::Known(0)],
         },
         Nullable(libfunc) => match libfunc {
             NullableConcreteLibfunc::Null(_)
@@ -389,7 +408,8 @@ pub fn core_libfunc_ap_change<InfoProvider: InvocationApChangeInfoProvider>(
                     ApChange::Known(1 + if libfunc.boundary.is_zero() { 0 } else { 1 }),
                 ]
             }
-            BoundedIntConcreteLibfunc::Trim(libfunc) => {
+            BoundedIntConcreteLibfunc::TrimMin(libfunc)
+            | BoundedIntConcreteLibfunc::TrimMax(libfunc) => {
                 let ap_change = if libfunc.trimmed_value.is_zero() { 0 } else { 1 };
                 vec![ApChange::Known(ap_change), ApChange::Known(ap_change)]
             }
@@ -421,6 +441,34 @@ pub fn core_libfunc_ap_change<InfoProvider: InvocationApChangeInfoProvider>(
             IntRangeConcreteLibfunc::TryNew(_) => vec![ApChange::Known(2), ApChange::Known(3)],
             IntRangeConcreteLibfunc::PopFront(_) => vec![ApChange::Known(1), ApChange::Known(1)],
         },
+        Blake(libfunc) => match libfunc {
+            BlakeConcreteLibfunc::Blake2sCompress(_) | BlakeConcreteLibfunc::Blake2sFinalize(_) => {
+                vec![ApChange::Known(1)]
+            }
+        },
+        Trace(_) => vec![ApChange::Known(0)],
+        QM31(libfunc) => match libfunc {
+            QM31Concrete::Const(_) => vec![ApChange::Known(0)],
+            QM31Concrete::IsZero(_) => vec![ApChange::Known(0), ApChange::Known(0)],
+            QM31Concrete::BinaryOperation(_) => vec![ApChange::Known(1)],
+            QM31Concrete::Pack(_) => vec![ApChange::Known(6)],
+            QM31Concrete::Unpack(_) => vec![ApChange::Known(13)],
+            QM31Concrete::FromM31(_) => vec![ApChange::Known(0)],
+        },
+        UnsafePanic(_) => vec![],
+        DummyFunctionCall(libfunc) => {
+            use cairo_lang_sierra::extensions::lib_func::SierraApChange;
+            let ap_change = &libfunc.signature.branch_signatures[0].ap_change;
+            vec![match ap_change {
+                SierraApChange::Unknown => ApChange::Unknown,
+                SierraApChange::Known { .. } => ApChange::Known(2),
+                SierraApChange::BranchAlign | SierraApChange::FunctionCall(_) => {
+                    unreachable!(
+                        "DummyFunctionCall ap change is `Unknown` or `Known` got {ap_change:?}"
+                    )
+                }
+            }]
+        }
     }
 }
 
@@ -449,14 +497,13 @@ fn uint_ap_change<TUintTraits: UintTraits + IntMulTraits + IsZeroTraits>(
 }
 
 /// Returns the ap changes for s8/s16/s32/s64 libfuncs.
-fn sint_ap_change<TSintTraits: SintTraits + IntMulTraits + IsZeroTraits>(
+fn sint_ap_change<TSintTraits: SintTraits + IntMulTraits>(
     libfunc: &SintConcrete<TSintTraits>,
 ) -> Vec<ApChange> {
     match libfunc {
         SintConcrete::Const(_) | SintConcrete::ToFelt252(_) => vec![ApChange::Known(0)],
         SintConcrete::Equal(_) => vec![ApChange::Known(1), ApChange::Known(1)],
         SintConcrete::FromFelt252(_) => vec![ApChange::Known(3), ApChange::Known(7)],
-        SintConcrete::IsZero(_) => vec![ApChange::Known(0), ApChange::Known(0)],
         SintConcrete::WideMul(_) => vec![ApChange::Known(0)],
         SintConcrete::Operation(_) => {
             vec![ApChange::Known(4), ApChange::Known(4), ApChange::Known(4)]

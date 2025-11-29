@@ -1,7 +1,6 @@
 use core::dict::{Felt252Dict, Felt252DictEntryTrait};
-use starknet::storage::StoragePathEntry;
-use starknet::storage::StoragePointerWriteAccess;
-use starknet::storage::StoragePointerReadAccess;
+use core::num::traits::One;
+use starknet::storage::{StoragePathEntry, StoragePointerReadAccess, StoragePointerWriteAccess};
 
 #[starknet::contract]
 mod libfuncs_coverage {
@@ -34,8 +33,7 @@ enum Libfuncs {
     Bool: BitwiseLibfuncs<bool>,
     Felt252: Felt252Libfuncs,
     Conversions: ConversionsLibfuncs,
-    CheckECDSA: (felt252, felt252, felt252, felt252),
-    RecoverECDSA: (felt252, felt252, felt252, bool),
+    Ec: EcLibfuncs,
     Sha256: ByteArray,
     ArrayU128: ArrayLibfuncs<u128>,
     ArrayU256: ArrayLibfuncs<u256>,
@@ -51,6 +49,7 @@ enum Libfuncs {
     Starknet: StarknetLibfuncs,
     Consts: ConstsLibfuncs,
     Snapshot: SnapshotLibfuncs,
+    RangeIter: (u8, u8),
 }
 
 enum NumericLibfuncs<T> {
@@ -64,6 +63,8 @@ enum IntLibfuncs<T> {
     Div: (T, T),
     Mod: (T, T),
     Lt: (T, T),
+    Inc: T,
+    Dec: T,
     Numeric: NumericLibfuncs<T>,
 }
 
@@ -125,6 +126,14 @@ enum Felt252TryIntoLibfuncs {
     StorageAddress: felt252,
 }
 
+enum EcLibfuncs {
+    PointNewNz: (felt252, felt252),
+    PointNewNzFromX: felt252,
+    PointCoordinates: NonZero<core::ec::EcPoint>,
+    PointNeg: core::ec::EcPoint,
+    StateUsage: core::ec::EcPoint,
+}
+
 enum ArrayLibfuncs<T> {
     New,
     Append: (Array<T>, T),
@@ -165,6 +174,8 @@ enum StarknetLibfuncs {
     GetExecutionInfoV2,
     ReplaceClass: starknet::ClassHash,
     SendMessageToL1: (felt252, Span<felt252>),
+    GetClassHashAt: starknet::ContractAddress,
+    MetaTxV0: (starknet::ContractAddress, felt252, Span<felt252>, Span<felt252>),
 }
 
 enum ConstsLibfuncs {
@@ -208,12 +219,7 @@ fn all_libfuncs(libfuncs: Libfuncs) {
         Libfuncs::Bool(libfuncs) => bitwise_libfuncs(libfuncs),
         Libfuncs::Felt252(libfuncs) => felt252_libfuncs(libfuncs),
         Libfuncs::Conversions(libfuncs) => conversions_libfuncs(libfuncs),
-        Libfuncs::CheckECDSA((
-            a, b, c, d,
-        )) => use_and_panic(core::ecdsa::check_ecdsa_signature(a, b, c, d)),
-        Libfuncs::RecoverECDSA((
-            a, b, c, d,
-        )) => use_and_panic(core::ecdsa::recover_public_key(a, b, c, d)),
+        Libfuncs::Ec(libfuncs) => ec_libfuncs(libfuncs),
         Libfuncs::Sha256(input) => use_and_panic(core::sha256::compute_sha256_byte_array(@input)),
         Libfuncs::ArrayU128(libfuncs) => array_libfuncs(libfuncs),
         Libfuncs::ArrayU256(libfuncs) => array_libfuncs(libfuncs),
@@ -231,9 +237,9 @@ fn all_libfuncs(libfuncs: Libfuncs) {
         Libfuncs::Starknet(libfuncs) => starknet_libfuncs(libfuncs),
         Libfuncs::Consts(libfuncs) => consts_libfuncs(libfuncs),
         Libfuncs::Snapshot(libfuncs) => snapshot_libfuncs(libfuncs),
+        Libfuncs::RangeIter((s, e)) => { for _ in s..e {} },
     }
 }
-
 use core::num::traits::Sqrt;
 use core::traits::{BitAnd, BitOr, BitXor};
 
@@ -253,6 +259,7 @@ fn unsigned_int_libfuncs<
     +PartialEq<T>,
     +Copy<T>,
     +Drop<T>,
+    impl One: One<T>,
 >(
     libfuncs: UnsignedIntLibfuncs<T>,
 ) {
@@ -264,7 +271,16 @@ fn unsigned_int_libfuncs<
 }
 
 fn int_libfuncs<
-    T, +Div<T>, +Rem<T>, +PartialOrd<T>, +Add<T>, +Sub<T>, +Mul<T>, +PartialEq<T>, +Drop<T>,
+    T,
+    +Div<T>,
+    +Rem<T>,
+    +PartialOrd<T>,
+    +Add<T>,
+    +Sub<T>,
+    +Mul<T>,
+    +PartialEq<T>,
+    +Drop<T>,
+    impl One: One<T>,
 >(
     libfuncs: IntLibfuncs<T>,
 ) {
@@ -272,6 +288,8 @@ fn int_libfuncs<
         IntLibfuncs::Div((a, b)) => use_and_panic(a / b),
         IntLibfuncs::Mod((a, b)) => use_and_panic(a % b),
         IntLibfuncs::Lt((a, b)) => use_and_panic(a < b),
+        IntLibfuncs::Inc(a) => use_and_panic(a + One::one()),
+        IntLibfuncs::Dec(a) => use_and_panic(a - One::one()),
         IntLibfuncs::Numeric(libfuncs) => numeric_libfuncs(libfuncs),
     }
 }
@@ -354,6 +372,25 @@ fn felt252_try_into_libfuncs(libfuncs: Felt252TryIntoLibfuncs) {
         >(v.try_into()),
     }
 }
+use core::ec::{EcPointTrait, EcStateTrait};
+
+fn ec_libfuncs(libfuncs: EcLibfuncs) {
+    match libfuncs {
+        EcLibfuncs::PointNewNz((x, y)) => use_and_panic(EcPointTrait::new_nz(x, y)),
+        EcLibfuncs::PointNewNzFromX(x) => use_and_panic(EcPointTrait::new_from_x(x)),
+        EcLibfuncs::PointCoordinates(p) => use_and_panic(p.coordinates()),
+        EcLibfuncs::PointNeg(p) => use_and_panic(-p),
+        EcLibfuncs::StateUsage(p) => use_and_panic(
+            {
+                let mut state = EcStateTrait::init();
+                let p = p.try_into().unwrap();
+                state.add(p);
+                state.add_mul(5, p);
+                state.finalize()
+            },
+        ),
+    }
+}
 
 fn array_libfuncs<T, +Drop<T>, impl BoxFromSpan: TryInto<Span<T>, @Box<[T; 5]>>>(
     libfuncs: ArrayLibfuncs<T>,
@@ -405,11 +442,10 @@ fn nullable_libfuncs<T, +Destruct<Nullable<T>>, +Destruct<T>>(libfuncs: Nullable
         NullableLibfuncs::Deref(nullable) => use_and_panic(nullable.deref()),
     }
 }
-
 use core::circuit::{
-    circuit_add, circuit_inverse, circuit_mul, circuit_sub, u384, AddInputResultTrait,
-    CircuitElement, CircuitInput, CircuitInputs, CircuitModulus, CircuitOutputsTrait,
-    EvalCircuitTrait,
+    AddInputResultTrait, CircuitElement, CircuitInput, CircuitInputs, CircuitModulus,
+    CircuitOutputsTrait, EvalCircuitTrait, circuit_add, circuit_inverse, circuit_mul, circuit_sub,
+    u384,
 };
 
 fn circuit_libfuncs(n: u384, input0: u384, input1: u384) {
@@ -431,8 +467,7 @@ fn circuit_libfuncs(n: u384, input0: u384, input1: u384) {
         .unwrap();
     use_and_panic(outputs.get_output(add));
 }
-
-use starknet::secp256_trait::{Secp256Trait, Secp256PointTrait, is_valid_signature, Signature};
+use starknet::secp256_trait::{Secp256PointTrait, Secp256Trait, Signature, is_valid_signature};
 
 fn secp_libfuncs<
     Secp256Point,
@@ -451,7 +486,6 @@ fn secp_libfuncs<
 trait Foo<TContractState> {
     fn foo(ref self: TContractState);
 }
-
 use starknet::syscalls;
 
 fn starknet_libfuncs(libfuncs: StarknetLibfuncs) {
@@ -480,6 +514,14 @@ fn starknet_libfuncs(libfuncs: StarknetLibfuncs) {
         StarknetLibfuncs::SendMessageToL1((
             address, data,
         )) => use_and_panic(syscalls::send_message_to_l1_syscall(address, data)),
+        StarknetLibfuncs::GetClassHashAt(address) => use_and_panic(
+            syscalls::get_class_hash_at_syscall(address),
+        ),
+        StarknetLibfuncs::MetaTxV0((
+            address, entry_point_selector, calldata, signature,
+        )) => use_and_panic(
+            syscalls::meta_tx_v0_syscall(address, entry_point_selector, calldata, signature),
+        ),
     }
 }
 
@@ -495,10 +537,8 @@ extern fn i32_const<const VALUE: i32>() -> i32 nopanic;
 extern fn i64_const<const VALUE: i64>() -> i64 nopanic;
 extern fn i128_const<const VALUE: i128>() -> i128 nopanic;
 extern fn bytes31_const<const VALUE: felt252>() -> bytes31 nopanic;
-use starknet::storage_access::storage_base_address_const;
-use starknet::contract_address::contract_address_const;
-use starknet::class_hash::class_hash_const;
 
+#[feature("deprecated-starknet-consts")]
 fn consts_libfuncs(libfuncs: ConstsLibfuncs) {
     match libfuncs {
         ConstsLibfuncs::Felt252 => use_and_panic(felt252_const::<0>()),
@@ -513,9 +553,13 @@ fn consts_libfuncs(libfuncs: ConstsLibfuncs) {
         ConstsLibfuncs::I64 => use_and_panic(i64_const::<0>()),
         ConstsLibfuncs::I128 => use_and_panic(i128_const::<0>()),
         ConstsLibfuncs::Byte31 => use_and_panic(bytes31_const::<0>()),
-        ConstsLibfuncs::StorageBase => use_and_panic(storage_base_address_const::<0>()),
-        ConstsLibfuncs::ClassHash => use_and_panic(class_hash_const::<0>()),
-        ConstsLibfuncs::ContractAddress => use_and_panic(contract_address_const::<0>()),
+        ConstsLibfuncs::StorageBase => use_and_panic(
+            starknet::storage_access::storage_base_address_const::<0>(),
+        ),
+        ConstsLibfuncs::ClassHash => use_and_panic(starknet::class_hash::class_hash_const::<0>()),
+        ConstsLibfuncs::ContractAddress => use_and_panic(
+            starknet::contract_address::contract_address_const::<0>(),
+        ),
     }
 }
 
@@ -523,8 +567,8 @@ fn snapshot_libfuncs(libfuncs: SnapshotLibfuncs) {
     match libfuncs {
         SnapshotLibfuncs::BoxForward(snap) => use_and_panic(snap.as_snapshot()),
         SnapshotLibfuncs::Match(snap) => match snap {
-            Option::Some(value) => use_and_panic(value),
-            Option::None => {},
+            Some(value) => use_and_panic(value),
+            None => {},
         },
     }
 }

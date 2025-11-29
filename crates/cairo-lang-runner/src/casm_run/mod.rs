@@ -2,6 +2,7 @@ use std::any::Any;
 use std::borrow::Cow;
 use std::collections::{HashMap, VecDeque};
 use std::ops::{Shl, Sub};
+use std::sync::Arc;
 use std::vec::IntoIter;
 
 use ark_ff::{BigInteger, PrimeField};
@@ -54,7 +55,7 @@ mod circuit;
 mod contract_address;
 mod dict_manager;
 
-/// Convert a Hint to the cairo-vm class HintParams by canonically serializing it to a string.
+/// Converts a hint to the Cairo VM class `HintParams` by canonically serializing it to a string.
 pub fn hint_to_hint_params(hint: &Hint) -> HintParams {
     HintParams {
         code: hint.representing_string(),
@@ -93,7 +94,7 @@ pub struct CairoHintProcessor<'a> {
     pub user_args: Vec<Vec<Arg>>,
     /// A mapping from a string that represents a hint to the hint object.
     pub string_to_hint: HashMap<String, Hint>,
-    /// The starknet state.
+    /// The Starknet state.
     pub starknet_state: StarknetState,
     /// Maintains the resources of the run.
     pub run_resources: RunResources,
@@ -102,6 +103,10 @@ pub struct CairoHintProcessor<'a> {
     pub syscalls_used_resources: StarknetExecutionResources,
     /// Avoid allocating memory segments so finalization of segment arena may not occur.
     pub no_temporary_segments: bool,
+    /// A set of markers created by the run.
+    pub markers: Vec<Vec<Felt252>>,
+    /// The traceback set by a panic trace hint call.
+    pub panic_traceback: Vec<(Relocatable, Relocatable)>,
 }
 
 pub fn cell_ref_to_relocatable(cell_ref: &CellRef, vm: &VirtualMachine) -> Relocatable {
@@ -112,7 +117,7 @@ pub fn cell_ref_to_relocatable(cell_ref: &CellRef, vm: &VirtualMachine) -> Reloc
     (base + (cell_ref.offset as i32)).unwrap()
 }
 
-/// Inserts a value into the vm memory cell represented by the cellref.
+/// Inserts a value into the VM memory cell represented by the cell reference.
 #[macro_export]
 macro_rules! insert_value_to_cellref {
     ($vm:ident, $cell_ref:ident, $value:expr) => {
@@ -126,8 +131,8 @@ type Log = (Vec<Felt252>, Vec<Felt252>);
 // L2 to L1 message type signature
 type L2ToL1Message = (Felt252, Vec<Felt252>);
 
-/// Execution scope for starknet related data.
-/// All values will be 0 and by default if not setup by the test.
+/// Execution scope for Starknet-related data.
+/// All values will be 0 by default if not set up by the test.
 #[derive(Clone, Default)]
 pub struct StarknetState {
     /// The values of addresses in the simulated storage per contract.
@@ -173,7 +178,7 @@ struct ContractLogs {
     l2_to_l1_messages: VecDeque<L2ToL1Message>,
 }
 
-/// Copy of the cairo `ExecutionInfo` struct.
+/// Copy of the Cairo `ExecutionInfo` struct.
 #[derive(Clone, Default)]
 struct ExecutionInfo {
     block_info: BlockInfo,
@@ -183,7 +188,7 @@ struct ExecutionInfo {
     entry_point_selector: Felt252,
 }
 
-/// Copy of the cairo `BlockInfo` struct.
+/// Copy of the Cairo `BlockInfo` struct.
 #[derive(Clone, Default)]
 struct BlockInfo {
     block_number: Felt252,
@@ -191,7 +196,7 @@ struct BlockInfo {
     sequencer_address: Felt252,
 }
 
-/// Copy of the cairo `TxInfo` struct.
+/// Copy of the Cairo `TxInfo` struct.
 #[derive(Clone, Default)]
 struct TxInfo {
     version: Felt252,
@@ -209,7 +214,7 @@ struct TxInfo {
     account_deployment_data: Vec<Felt252>,
 }
 
-/// Copy of the cairo `ResourceBounds` struct.
+/// Copy of the Cairo `ResourceBounds` struct.
 #[derive(Clone, Default)]
 struct ResourceBounds {
     resource: Felt252,
@@ -223,12 +228,12 @@ struct MemoryExecScope {
     next_address: Relocatable,
 }
 
-/// Fetches the value of a cell from the vm.
+/// Fetches the value of a cell from the VM.
 fn get_cell_val(vm: &VirtualMachine, cell: &CellRef) -> Result<Felt252, VirtualMachineError> {
     Ok(*vm.get_integer(cell_ref_to_relocatable(cell, vm))?)
 }
 
-/// Fetch the `MaybeRelocatable` value from an address.
+/// Fetches the `MaybeRelocatable` value from an address.
 fn get_maybe_from_addr(
     vm: &VirtualMachine,
     addr: Relocatable,
@@ -237,7 +242,7 @@ fn get_maybe_from_addr(
         .ok_or_else(|| VirtualMachineError::InvalidMemoryValueTemporaryAddress(Box::new(addr)))
 }
 
-/// Fetches the maybe relocatable value of a cell from the vm.
+/// Fetches the maybe-relocatable value of a cell from the VM.
 fn get_cell_maybe(
     vm: &VirtualMachine,
     cell: &CellRef,
@@ -245,7 +250,7 @@ fn get_cell_maybe(
     get_maybe_from_addr(vm, cell_ref_to_relocatable(cell, vm))
 }
 
-/// Fetches the value of a cell plus an offset from the vm, useful for pointers.
+/// Fetches the value of a cell plus an offset from the VM; useful for pointers.
 pub fn get_ptr(
     vm: &VirtualMachine,
     cell: &CellRef,
@@ -254,7 +259,7 @@ pub fn get_ptr(
     Ok((vm.get_relocatable(cell_ref_to_relocatable(cell, vm))? + offset)?)
 }
 
-/// Fetches the value of a pointer described by the value at `cell` plus an offset from the vm.
+/// Fetches the value of a pointer described by the value at `cell` plus an offset from the VM.
 fn get_double_deref_val(
     vm: &VirtualMachine,
     cell: &CellRef,
@@ -263,8 +268,8 @@ fn get_double_deref_val(
     Ok(*vm.get_integer(get_ptr(vm, cell, offset)?)?)
 }
 
-/// Fetches the maybe relocatable value of a pointer described by the value at `cell` plus an offset
-/// from the vm.
+/// Fetches the maybe-relocatable value of a pointer described by the value at `cell` plus an offset
+/// from the VM.
 fn get_double_deref_maybe(
     vm: &VirtualMachine,
     cell: &CellRef,
@@ -273,7 +278,7 @@ fn get_double_deref_maybe(
     get_maybe_from_addr(vm, get_ptr(vm, cell, offset)?)
 }
 
-/// Extracts a parameter assumed to be a buffer, and converts it into a relocatable.
+/// Extracts a parameter assumed to be a buffer and converts it into a relocatable.
 pub fn extract_relocatable(
     vm: &VirtualMachine,
     buffer: &ResOperand,
@@ -282,7 +287,7 @@ pub fn extract_relocatable(
     get_ptr(vm, base, &offset)
 }
 
-/// Fetches the value of `res_operand` from the vm.
+/// Fetches the value of `res_operand` from the VM.
 pub fn get_val(
     vm: &VirtualMachine,
     res_operand: &ResOperand,
@@ -329,7 +334,7 @@ macro_rules! fail_syscall {
     };
 }
 
-/// Gas Costs for syscalls.
+/// Gas costs for syscalls.
 /// Mostly duplication of:
 /// `https://github.com/starkware-libs/blockifier/blob/main/crates/blockifier/src/abi/constants.rs`.
 mod gas_costs {
@@ -370,7 +375,7 @@ mod gas_costs {
     pub const STORAGE_WRITE: usize = 50 * STEP;
 }
 
-/// Deducts gas from the given gas counter, or fails the syscall if there is not enough gas.
+/// Deducts gas from the given gas counter or fails the syscall if there is not enough gas.
 macro_rules! deduct_gas {
     ($gas:ident, $amount:ident) => {
         if *$gas < gas_costs::$amount {
@@ -380,7 +385,7 @@ macro_rules! deduct_gas {
     };
 }
 
-/// Fetches the maybe relocatable value of `res_operand` from the vm.
+/// Fetches the maybe-relocatable value of `res_operand` from the VM.
 fn get_maybe(
     vm: &VirtualMachine,
     res_operand: &ResOperand,
@@ -417,9 +422,8 @@ impl HintProcessorLogic for CairoHintProcessor<'_> {
         vm: &mut VirtualMachine,
         exec_scopes: &mut ExecutionScopes,
         hint_data: &Box<dyn Any>,
-        _constants: &HashMap<String, Felt252>,
     ) -> Result<(), HintError> {
-        let hint = hint_data.downcast_ref::<Hint>().unwrap();
+        let hint = hint_data.downcast_ref::<Hint>().ok_or(HintError::WrongHintData)?;
         let hint = match hint {
             Hint::Starknet(hint) => hint,
             Hint::Core(core_hint_base) => {
@@ -464,6 +468,8 @@ impl HintProcessorLogic for CairoHintProcessor<'_> {
         _ap_tracking_data: &ApTracking,
         _reference_ids: &HashMap<String, usize>,
         _references: &[HintReference],
+        _accessible_scopes: &[String],
+        _constants: Arc<HashMap<String, Felt252>>,
     ) -> Result<Box<dyn Any>, VirtualMachineError> {
         Ok(Box::new(self.string_to_hint[hint_code].clone()))
     }
@@ -484,6 +490,23 @@ impl ResourceTracker for CairoHintProcessor<'_> {
 
     fn run_resources(&self) -> &RunResources {
         self.run_resources.run_resources()
+    }
+}
+
+pub trait StarknetHintProcessor: HintProcessor {
+    /// Take [`StarknetState`] out of this hint processor, resetting own state.
+    fn take_starknet_state(&mut self) -> StarknetState;
+    /// Take [`StarknetExecutionResources`] out of this hint processor, resetting own state.
+    fn take_syscalls_used_resources(&mut self) -> StarknetExecutionResources;
+}
+
+impl StarknetHintProcessor for CairoHintProcessor<'_> {
+    fn take_starknet_state(&mut self) -> StarknetState {
+        std::mem::take(&mut self.starknet_state)
+    }
+
+    fn take_syscalls_used_resources(&mut self) -> StarknetExecutionResources {
+        std::mem::take(&mut self.syscalls_used_resources)
     }
 }
 
@@ -824,6 +847,9 @@ impl CairoHintProcessor<'_> {
             "GetClassHashAt" => execute_handle_helper(&mut |system_buffer, gas_counter| {
                 self.get_class_hash_at(gas_counter, system_buffer.next_felt252()?.into_owned())
             }),
+            "MetaTxV0" => execute_handle_helper(&mut |_system_buffer, _gas_counter| {
+                panic!("Meta transaction is not supported.")
+            }),
             _ => panic!("Unknown selector for system call!"),
         }
     }
@@ -983,7 +1009,7 @@ impl CairoHintProcessor<'_> {
     ) -> Result<SyscallResult, HintError> {
         deduct_gas!(gas_counter, DEPLOY);
 
-        // Assign the starknet address of the contract.
+        // Assign the Starknet address of the contract.
         let deployer_address = if deploy_from_zero {
             Felt252::zero()
         } else {
@@ -1125,7 +1151,7 @@ impl CairoHintProcessor<'_> {
         new_class: Felt252,
     ) -> Result<SyscallResult, HintError> {
         deduct_gas!(gas_counter, REPLACE_CLASS);
-        // Validating the class hash was declared as one of the starknet contracts.
+        // Validating the class hash was declared as one of the Starknet contracts.
         if !self
             .runner
             .expect("Runner is needed for starknet.")
@@ -1170,7 +1196,7 @@ impl CairoHintProcessor<'_> {
             .registry()
             .get_function(entry_point)
             .expect("Entrypoint exists, but not found.");
-        let mut res = runner
+        let res = runner
             .run_function_with_starknet_context(
                 function,
                 vec![Arg::Array(calldata.into_iter().map(Arg::Value).collect())],
@@ -1184,7 +1210,7 @@ impl CairoHintProcessor<'_> {
         *gas_counter = res.gas_counter.unwrap().to_usize().unwrap();
         match res.value {
             RunResultValue::Success(value) => {
-                self.starknet_state = std::mem::take(&mut res.starknet_state);
+                self.starknet_state = res.starknet_state;
                 Ok(segment_with_data(vm, read_array_result_as_vec(&res.memory, &value).into_iter())
                     .expect("failed to allocate segment"))
             }
@@ -1306,15 +1332,20 @@ impl CairoHintProcessor<'_> {
 
     /// Executes an external hint.
     fn execute_external_hint(
-        &self,
+        &mut self,
         vm: &mut VirtualMachine,
         core_hint: &ExternalHint,
     ) -> Result<(), HintError> {
         match core_hint {
-            ExternalHint::AddRelocationRule { src, dst } => Ok(vm.add_relocation_rule(
+            ExternalHint::AddRelocationRule { src, dst } => vm.add_relocation_rule(
                 extract_relocatable(vm, src)?,
-                extract_relocatable(vm, dst)?,
-            )?),
+                // The following is needed for when the `extensive_hints` feature is used in the
+                // VM, in which case `dst_ptr` is a `MaybeRelocatable` type.
+                #[allow(clippy::useless_conversion)]
+                {
+                    extract_relocatable(vm, dst)?.into()
+                },
+            )?,
             ExternalHint::WriteRunParam { index, dst } => {
                 let index = get_val(vm, index)?.to_usize().expect("Got a bad index.");
                 let mut stack = vec![(cell_ref_to_relocatable(dst, vm), &self.user_args[index])];
@@ -1336,9 +1367,56 @@ impl CairoHintProcessor<'_> {
                         }
                     }
                 }
-                Ok(())
+            }
+            ExternalHint::AddMarker { start, end } => {
+                self.markers.push(read_felts(vm, start, end)?);
+            }
+            ExternalHint::AddTrace { flag } => {
+                let flag = get_val(vm, flag)?;
+                // Setting the panic backtrace if the given flag is panic.
+                if flag == 0x70616e6963u64.into() {
+                    let mut fp = vm.get_fp();
+                    self.panic_traceback = vec![(vm.get_pc(), fp)];
+                    // Fetch the fp and pc traceback entries
+                    loop {
+                        let ptr_at_offset = |offset: usize| {
+                            (fp - offset).ok().and_then(|r| vm.get_relocatable(r).ok())
+                        };
+                        // Get return pc.
+                        let Some(ret_pc) = ptr_at_offset(1) else {
+                            break;
+                        };
+                        println!("ret_pc: {ret_pc}");
+                        // Get fp traceback.
+                        let Some(ret_fp) = ptr_at_offset(2) else {
+                            break;
+                        };
+                        println!("ret_fp: {ret_fp}");
+                        if ret_fp == fp {
+                            break;
+                        }
+                        fp = ret_fp;
+
+                        let call_instruction = |offset: usize| -> Option<Relocatable> {
+                            let ptr = (ret_pc - offset).ok()?;
+                            println!("ptr: {ptr}");
+                            let inst = vm.get_integer(ptr).ok()?;
+                            println!("inst: {inst}");
+                            let inst_short = inst.to_u64()?;
+                            (inst_short & 0x7000_0000_0000_0000 == 0x1000_0000_0000_0000)
+                                .then_some(ptr)
+                        };
+                        if let Some(call_pc) = call_instruction(1).or_else(|| call_instruction(2)) {
+                            self.panic_traceback.push((call_pc, fp));
+                        } else {
+                            break;
+                        }
+                    }
+                    self.panic_traceback.reverse();
+                }
             }
         }
+        Ok(())
     }
 }
 
@@ -1353,7 +1431,7 @@ fn vec_as_array<const COUNT: usize>(
 /// Executes the `keccak_syscall` syscall.
 fn keccak(gas_counter: &mut usize, data: Vec<Felt252>) -> Result<SyscallResult, HintError> {
     deduct_gas!(gas_counter, KECCAK);
-    if data.len() % 17 != 0 {
+    if !data.len().is_multiple_of(17) {
         fail_syscall!(b"Invalid keccak input size");
     }
     let mut state = [0u64; 25];
@@ -1379,10 +1457,9 @@ fn sha_256_process_block(
     vm: &mut dyn VMWrapper,
 ) -> Result<SyscallResult, HintError> {
     deduct_gas!(gas_counter, SHA256_PROCESS_BLOCK);
-    let data_as_bytes = sha2::digest::generic_array::GenericArray::from_exact_iter(
+    let data_as_bytes = FromIterator::from_iter(
         data.iter().flat_map(|felt| felt.to_bigint().to_u32().unwrap().to_be_bytes()),
-    )
-    .unwrap();
+    );
     let mut state_as_words: [u32; 8] = prev_state
         .iter()
         .map(|felt| felt.to_bigint().to_u32().unwrap())
@@ -1525,14 +1602,14 @@ fn get_secp256k1_exec_scope(
 
 // --- secp256r1 ---
 
-/// Executes the `secp256k1_new_syscall` syscall.
+/// Executes the `secp256r1_new_syscall` syscall.
 fn secp256r1_new(
     gas_counter: &mut usize,
     x: BigUint,
     y: BigUint,
     exec_scopes: &mut ExecutionScopes,
 ) -> Result<SyscallResult, HintError> {
-    deduct_gas!(gas_counter, SECP256R1_GET_POINT_FROM_X);
+    deduct_gas!(gas_counter, SECP256R1_NEW);
     let modulus = <secp256r1::Fq as PrimeField>::MODULUS.into();
     if x >= modulus || y >= modulus {
         fail_syscall!(b"Coordinates out of range");
@@ -1595,7 +1672,7 @@ fn secp256r1_get_point_from_x(
     y_parity: bool,
     exec_scopes: &mut ExecutionScopes,
 ) -> Result<SyscallResult, HintError> {
-    deduct_gas!(gas_counter, SECP256R1_NEW);
+    deduct_gas!(gas_counter, SECP256R1_GET_POINT_FROM_X);
     if x >= <secp256r1::Fq as PrimeField>::MODULUS.into() {
         fail_syscall!(b"Coordinates out of range");
     }
@@ -1707,8 +1784,8 @@ pub fn execute_deprecated_hint(
     Ok(())
 }
 
-/// Allocates a memory buffer of size `size` on a vm segment.
-/// Segment will be reused between calls.
+/// Allocates a memory buffer of size `size` on a VM segment.
+/// The segment will be reused between calls.
 fn alloc_memory(
     exec_scopes: &mut ExecutionScopes,
     vm: &mut VirtualMachine,
@@ -1724,6 +1801,34 @@ fn alloc_memory(
     let scope = exec_scopes.get_mut_ref::<MemoryExecScope>(NAME)?;
     let updated = (scope.next_address + size)?;
     Ok(std::mem::replace(&mut scope.next_address, updated))
+}
+
+/// Sample a random point on the elliptic curve and insert into memory.
+pub fn random_ec_point<R: rand::RngCore>(
+    vm: &mut VirtualMachine,
+    x: &CellRef,
+    y: &CellRef,
+    rng: &mut R,
+) -> Result<(), HintError> {
+    // Keep sampling a random field element `X` until `X^3 + X + beta` is a quadratic
+    // residue.
+    let (random_x, random_y) = loop {
+        // Randomizing 31 bytes to make sure is in range.
+        // TODO(orizi): Use `Felt252` random implementation when exists.
+        let x_bytes: [u8; 31] = rng.random();
+        let random_x = Felt252::from_bytes_be_slice(&x_bytes);
+        /// The Beta value of the Starkware elliptic curve.
+        pub const BETA: Felt252 = Felt252::from_hex_unchecked(
+            "0x6f21413efbe40de150e596d72f7a8c5609ad26c15c915c1f4cdfcb99cee9e89",
+        );
+        let random_y_squared = random_x * random_x * random_x + random_x + BETA;
+        if let Some(random_y) = random_y_squared.sqrt() {
+            break (random_x, random_y);
+        }
+    };
+    insert_value_to_cellref!(vm, x, random_x)?;
+    insert_value_to_cellref!(vm, y, random_y)?;
+    Ok(())
 }
 
 /// Executes a core hint.
@@ -1884,25 +1989,8 @@ pub fn execute_core_hint(
             insert_value_to_cellref!(vm, y, y_value)?;
         }
         CoreHint::RandomEcPoint { x, y } => {
-            // Keep sampling a random field element `X` until `X^3 + X + beta` is a quadratic
-            // residue.
-            let mut rng = rand::thread_rng();
-            let (random_x, random_y) = loop {
-                // Randominzing 31 bytes to make sure is in range.
-                // TODO(orizi): Use `Felt252` random implementation when exists.
-                let x_bytes: [u8; 31] = rng.gen();
-                let random_x = Felt252::from_bytes_be_slice(&x_bytes);
-                /// The Beta value of the Starkware elliptic curve.
-                pub const BETA: Felt252 = Felt252::from_hex_unchecked(
-                    "0x6f21413efbe40de150e596d72f7a8c5609ad26c15c915c1f4cdfcb99cee9e89",
-                );
-                let random_y_squared = random_x * random_x * random_x + random_x + BETA;
-                if let Some(random_y) = random_y_squared.sqrt() {
-                    break (random_x, random_y);
-                }
-            };
-            insert_value_to_cellref!(vm, x, random_x)?;
-            insert_value_to_cellref!(vm, y, random_y)?;
+            let mut rng = rand::rng();
+            random_ec_point(vm, x, y, &mut rng)?;
         }
         CoreHint::FieldSqrt { val, sqrt } => {
             let val = get_val(vm, val)?;
@@ -2184,7 +2272,7 @@ pub fn execute_core_hint(
 }
 
 /// Reads a range of `Felt252`s from the VM.
-fn read_felts(
+pub fn read_felts(
     vm: &mut VirtualMachine,
     start: &ResOperand,
     end: &ResOperand,
@@ -2208,8 +2296,8 @@ fn read_array_result_as_vec(memory: &[Option<Felt252>], value: &[Felt252]) -> Ve
     let [res_start, res_end] = value else {
         panic!("Unexpected return value from contract call");
     };
-    let res_start: usize = res_start.clone().to_bigint().try_into().unwrap();
-    let res_end: usize = res_end.clone().to_bigint().try_into().unwrap();
+    let res_start: usize = res_start.to_bigint().try_into().unwrap();
+    let res_end: usize = res_end.to_bigint().try_into().unwrap();
     (res_start..res_end).map(|i| memory[i].unwrap()).collect()
 }
 
@@ -2252,8 +2340,8 @@ pub fn run_function_with_runner(
     additional_initialization(&mut runner.vm)?;
 
     runner.run_until_pc(end, hint_processor).map_err(CairoRunError::from)?;
-    runner.end_run(true, false, hint_processor).map_err(CairoRunError::from)?;
-    runner.relocate(true).map_err(CairoRunError::from)?;
+    runner.end_run(true, false, hint_processor, false).map_err(CairoRunError::from)?;
+    runner.relocate(true, true).map_err(CairoRunError::from)?;
     Ok(())
 }
 
@@ -2274,9 +2362,20 @@ pub fn build_cairo_runner(
         None,
     )
     .map_err(CairoRunError::from)?;
-    CairoRunner::new(&program, LayoutName::all_cairo, false, true)
-        .map_err(CairoRunError::from)
-        .map_err(Box::new)
+    let dynamic_layout_params = None;
+    let proof_mode = false;
+    let trace_enabled = true;
+    let disable_trace_padding = false;
+    CairoRunner::new(
+        &program,
+        LayoutName::all_cairo,
+        dynamic_layout_params,
+        proof_mode,
+        trace_enabled,
+        disable_trace_padding,
+    )
+    .map_err(CairoRunError::from)
+    .map_err(Box::new)
 }
 
 /// The result of [run_function].
@@ -2322,15 +2421,15 @@ pub fn run_function<'a, 'b: 'a>(
 }
 
 /// Formats the given felts as a debug string.
-fn format_for_debug(mut felts: IntoIter<Felt252>) -> String {
+pub fn format_for_debug(mut felts: IntoIter<Felt252>) -> String {
     let mut items = Vec::new();
     while let Some(item) = format_next_item(&mut felts) {
         items.push(item);
     }
-    if let [item] = &items[..] {
-        if item.is_string {
-            return item.item.clone();
-        }
+    if let [item] = &items[..]
+        && item.is_string
+    {
+        return item.item.clone();
     }
     items
         .into_iter()
@@ -2370,12 +2469,26 @@ where
 {
     let first_felt = values.next()?;
 
-    if first_felt == Felt252::from_hex(BYTE_ARRAY_MAGIC).unwrap() {
-        if let Some(string) = try_format_string(values) {
-            return Some(FormattedItem { item: string, is_string: true });
-        }
+    if first_felt == Felt252::from_hex(BYTE_ARRAY_MAGIC).unwrap()
+        && let Some(string) = try_format_string(values)
+    {
+        return Some(FormattedItem { item: string, is_string: true });
     }
     Some(FormattedItem { item: format_short_string(&first_felt), is_string: false })
+}
+
+/// Formats the given felts as a panic string.
+pub fn format_for_panic<T>(mut felts: T) -> String
+where
+    T: Iterator<Item = Felt252> + Clone,
+{
+    let mut items = Vec::new();
+    while let Some(item) = format_next_item(&mut felts) {
+        items.push(item.quote_if_string());
+    }
+    let panic_values_string =
+        if let [item] = &items[..] { item.clone() } else { format!("({})", items.join(", ")) };
+    format!("Panicked with {panic_values_string}.")
 }
 
 /// Formats a `Felt252`, as a short string if possible.

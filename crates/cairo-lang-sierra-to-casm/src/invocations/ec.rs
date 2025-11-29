@@ -26,7 +26,7 @@ pub fn build(
 ) -> Result<CompiledInvocation, InvocationError> {
     match libfunc {
         EcConcreteLibfunc::IsZero(_) => build_ec_point_is_zero(builder),
-        EcConcreteLibfunc::Neg(_) => build_ec_neg(builder),
+        EcConcreteLibfunc::Neg(_) | EcConcreteLibfunc::NegNz(_) => build_ec_neg(builder),
         EcConcreteLibfunc::StateAdd(_) => build_ec_state_add(builder),
         EcConcreteLibfunc::TryNew(_) => build_ec_point_try_new_nz(builder),
         EcConcreteLibfunc::StateFinalize(_) => build_ec_state_finalize(builder),
@@ -112,7 +112,7 @@ fn add_ec_points_inner(
     (result_x, result_y)
 }
 
-/// Generates casm instructions for `ec_point_zero()`.
+/// Generates CASM instructions for `ec_point_zero()`.
 fn build_ec_zero(
     builder: CompiledInvocationBuilder<'_>,
 ) -> Result<CompiledInvocation, InvocationError> {
@@ -264,7 +264,7 @@ fn build_ec_point_unwrap(
     ))
 }
 
-/// Generates casm instructions for `ec_point_is_zero()`.
+/// Generates CASM instructions for `ec_point_is_zero()`.
 fn build_ec_point_is_zero(
     builder: CompiledInvocationBuilder<'_>,
 ) -> Result<CompiledInvocation, InvocationError> {
@@ -286,7 +286,7 @@ fn build_ec_point_is_zero(
     ))
 }
 
-/// Generates casm instructions for `ec_neg()`.
+/// Generates CASM instructions for `ec_neg()`.
 fn build_ec_neg(
     builder: CompiledInvocationBuilder<'_>,
 ) -> Result<CompiledInvocation, InvocationError> {

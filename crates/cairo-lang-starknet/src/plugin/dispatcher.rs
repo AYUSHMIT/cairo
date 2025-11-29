@@ -1,29 +1,33 @@
 use cairo_lang_defs::patcher::{PatchBuilder, RewriteNode};
 use cairo_lang_defs::plugin::{PluginDiagnostic, PluginGeneratedFile, PluginResult};
+use cairo_lang_semantic::keyword::SELF_PARAM_KW;
 use cairo_lang_syntax::node::ast::{
     self, MaybeTraitBody, OptionReturnTypeClause, OptionTypeClause,
 };
-use cairo_lang_syntax::node::db::SyntaxGroup;
-use cairo_lang_syntax::node::helpers::{BodyItems, QueryAttrs};
+use cairo_lang_syntax::node::helpers::{BodyItems, IsDependentType, QueryAttrs};
 use cairo_lang_syntax::node::{Terminal, TypedStablePtr, TypedSyntaxNode};
 use cairo_lang_utils::extract_matches;
 use indoc::formatdoc;
 use itertools::Itertools;
+use salsa::Database;
 
 use super::consts::CALLDATA_PARAM_NAME;
 use super::utils::{AstPathExtract, ParamEx};
-use super::{DEPRECATED_ABI_ATTR, INTERFACE_ATTR, STORE_TRAIT};
+use super::{DEPRECATED_ABI_ATTR, DISPATCHER_DOC_GROUP_ATTR, INTERFACE_ATTR, STORE_TRAIT};
 
 /// The name of the variable that holds the returned data.
 const RET_DATA: &str = "__dispatcher_return_data__";
 
 /// If the trait is annotated with INTERFACE_ATTR, generate the relevant dispatcher logic.
-pub fn handle_trait(db: &dyn SyntaxGroup, trait_ast: ast::ItemTrait) -> PluginResult {
+pub fn handle_trait<'db>(
+    db: &'db dyn Database,
+    trait_ast: ast::ItemTrait<'db>,
+) -> PluginResult<'db> {
     if trait_ast.has_attr(db, DEPRECATED_ABI_ATTR) {
         return PluginResult {
             code: None,
             diagnostics: vec![PluginDiagnostic::error(
-                trait_ast.stable_ptr().untyped(),
+                trait_ast.stable_ptr(db).untyped(),
                 format!(
                     "The '{DEPRECATED_ABI_ATTR}' attribute for traits was deprecated, please use \
                      `{INTERFACE_ATTR}` instead.",
@@ -41,8 +45,8 @@ pub fn handle_trait(db: &dyn SyntaxGroup, trait_ast: ast::ItemTrait) -> PluginRe
             return PluginResult {
                 code: None,
                 diagnostics: vec![PluginDiagnostic::error(
-                    empty_body.stable_ptr().untyped(),
-                    "Starknet interfaces without body are not supported.".to_string(),
+                    empty_body.stable_ptr(db).untyped(),
+                    "Starknet interfaces without a body are not supported.".to_string(),
                 )],
                 remove_original_item: false,
             };
@@ -52,8 +56,8 @@ pub fn handle_trait(db: &dyn SyntaxGroup, trait_ast: ast::ItemTrait) -> PluginRe
     let Some(single_generic_param) = (match &generic_params {
         ast::OptionWrappedGenericParamList::Empty(_) => None,
         ast::OptionWrappedGenericParamList::WrappedGenericParamList(generic_params) => {
-            if let [ast::GenericParam::Type(param)] =
-                generic_params.generic_params(db).elements(db).as_slice()
+            if let Some([ast::GenericParam::Type(param)]) =
+                generic_params.generic_params(db).elements(db).collect_array()
             {
                 Some(param.name(db).text(db))
             } else {
@@ -64,7 +68,7 @@ pub fn handle_trait(db: &dyn SyntaxGroup, trait_ast: ast::ItemTrait) -> PluginRe
         return PluginResult {
             code: None,
             diagnostics: vec![PluginDiagnostic::error(
-                generic_params.stable_ptr().untyped(),
+                generic_params.stable_ptr(db).untyped(),
                 "Starknet interfaces must have exactly one generic parameter, which is a type."
                     .to_string(),
             )],
@@ -79,33 +83,40 @@ pub fn handle_trait(db: &dyn SyntaxGroup, trait_ast: ast::ItemTrait) -> PluginRe
     let mut library_caller_method_impls = vec![];
     let mut safe_contract_caller_method_impls = vec![];
     let mut safe_library_caller_method_impls = vec![];
-    let base_name = trait_ast.name(db).text(db);
+    let base_name = trait_ast.name(db).text(db).long(db);
     let dispatcher_trait_name = format!("{base_name}DispatcherTrait");
     let safe_dispatcher_trait_name = format!("{base_name}SafeDispatcherTrait");
     let contract_caller_name = format!("{base_name}Dispatcher");
     let safe_contract_caller_name = format!("{base_name}SafeDispatcher");
     let library_caller_name = format!("{base_name}LibraryDispatcher");
     let safe_library_caller_name = format!("{base_name}SafeLibraryDispatcher");
-    for item_ast in body.items_vec(db) {
+    for item_ast in body.iter_items(db) {
         match item_ast {
             ast::TraitItem::Function(func) => {
+                if let ast::MaybeTraitFunctionBody::Some(body) = func.body(db) {
+                    diagnostics.push(PluginDiagnostic::error(
+                        body.stable_ptr(db),
+                        format!("`{INTERFACE_ATTR}` functions don't support bodies."),
+                    ));
+                }
                 let declaration = func.declaration(db);
 
                 let mut skip_generation = false;
                 let mut serialization_code = vec![];
                 let signature = declaration.signature(db);
-                let mut params = signature.parameters(db).elements(db).into_iter();
+                let sig_params = signature.parameters(db);
+                let mut params = sig_params.elements(db);
                 // The first parameter is the `self` parameter.
                 let Some(self_param) = params.next() else {
                     diagnostics.push(PluginDiagnostic::error(
-                        declaration.stable_ptr().untyped(),
-                        "`starknet::interface` functions must have a `self` parameter.".to_string(),
+                        declaration.stable_ptr(db),
+                        format!("`{INTERFACE_ATTR}` functions must have a `self` parameter."),
                     ));
                     continue;
                 };
-                if self_param.name(db).text(db) != "self" {
+                if self_param.name(db).text(db).long(db) != SELF_PARAM_KW {
                     diagnostics.push(PluginDiagnostic::error(
-                        self_param.stable_ptr().untyped(),
+                        self_param.stable_ptr(db),
                         "The first parameter must be named `self`.".to_string(),
                     ));
                     skip_generation = true;
@@ -113,18 +124,19 @@ pub fn handle_trait(db: &dyn SyntaxGroup, trait_ast: ast::ItemTrait) -> PluginRe
                 let self_param_type_ok = if self_param.is_ref_param(db) {
                     extract_matches!(self_param.type_clause(db), OptionTypeClause::TypeClause)
                         .ty(db)
-                        .is_identifier(db, &single_generic_param)
+                        .is_identifier(db, single_generic_param.long(db).as_str())
                 } else if let Some(snapped_ty) = self_param.try_extract_snapshot(db) {
-                    snapped_ty.is_identifier(db, &single_generic_param)
+                    snapped_ty.is_identifier(db, single_generic_param.long(db).as_str())
                 } else {
                     false
                 };
                 if !self_param_type_ok {
                     diagnostics.push(PluginDiagnostic::error(
-                        self_param.stable_ptr().untyped(),
-                        "`starknet::interface` function first parameter must be a reference to \
-                         the trait's generic parameter or a snapshot of it."
-                            .to_string(),
+                        self_param.stable_ptr(db),
+                        format!(
+                            "`{INTERFACE_ATTR}` function first parameter must be a reference to \
+                             the trait's generic parameter or a snapshot of it."
+                        ),
                     ));
                     skip_generation = true;
                 }
@@ -134,34 +146,35 @@ pub fn handle_trait(db: &dyn SyntaxGroup, trait_ast: ast::ItemTrait) -> PluginRe
                         skip_generation = true;
 
                         diagnostics.push(PluginDiagnostic::error(
-                            param.modifiers(db).stable_ptr().untyped(),
-                            "`starknet::interface` functions don't support `ref` parameters other \
-                             than the first one."
-                                .to_string(),
+                            param.modifiers(db).stable_ptr(db),
+                            format!(
+                                "`{INTERFACE_ATTR}` functions don't support `ref` parameters \
+                                 other than the first one."
+                            ),
                         ))
                     }
                     if extract_matches!(param.type_clause(db), OptionTypeClause::TypeClause)
                         .ty(db)
-                        .is_dependent_type(db, &single_generic_param)
+                        .is_dependent_type(db, &[single_generic_param])
                     {
                         skip_generation = true;
 
                         diagnostics.push(PluginDiagnostic::error(
                             extract_matches!(param.type_clause(db), OptionTypeClause::TypeClause)
                                 .ty(db)
-                                .stable_ptr()
-                                .untyped(),
-                            "`starknet::interface` functions don't support parameters that depend \
-                             on the trait's generic param type."
-                                .to_string(),
+                                .stable_ptr(db),
+                            format!(
+                                "`{INTERFACE_ATTR}` functions don't support parameters that \
+                                 depend on the trait's generic param type."
+                            ),
                         ))
                     }
 
-                    if param.name(db).text(db) == CALLDATA_PARAM_NAME {
+                    if param.name(db).text(db).long(db) == CALLDATA_PARAM_NAME {
                         skip_generation = true;
 
                         diagnostics.push(PluginDiagnostic::error(
-                            param.name(db).stable_ptr().untyped(),
+                            param.name(db).stable_ptr(db),
                             "Parameter name `__calldata__` cannot be used.".to_string(),
                         ))
                     }
@@ -213,8 +226,10 @@ pub fn handle_trait(db: &dyn SyntaxGroup, trait_ast: ast::ItemTrait) -> PluginRe
                     )]
                     .into(),
                 ));
-                let entry_point_selector =
-                    RewriteNode::Text(format!("selector!(\"{}\")", declaration.name(db).text(db)));
+                let entry_point_selector = RewriteNode::Text(format!(
+                    "selector!(\"{}\")",
+                    declaration.name(db).text(db).long(db)
+                ));
                 contract_caller_method_impls.push(declaration_method_impl(
                     dispatcher_signature(db, &declaration, &contract_caller_name, true),
                     entry_point_selector.clone(),
@@ -256,22 +271,22 @@ pub fn handle_trait(db: &dyn SyntaxGroup, trait_ast: ast::ItemTrait) -> PluginRe
             ast::TraitItem::Missing(_) => {}
             ast::TraitItem::Type(ty) => {
                 diagnostics.push(PluginDiagnostic::error(
-                    ty.type_kw(db).stable_ptr().untyped(),
-                    "`starknet::interface` does not yet support type items.".to_string(),
+                    ty.type_kw(db).stable_ptr(db),
+                    format!("`{INTERFACE_ATTR}` does not yet support type items."),
                 ));
                 continue;
             }
             ast::TraitItem::Constant(constant) => {
                 diagnostics.push(PluginDiagnostic::error(
-                    constant.const_kw(db).stable_ptr().untyped(),
-                    "`starknet::interface` does not yet support constant items.".to_string(),
+                    constant.const_kw(db).stable_ptr(db),
+                    format!("`{INTERFACE_ATTR}` does not yet support constant items."),
                 ));
                 continue;
             }
             ast::TraitItem::Impl(imp) => {
                 diagnostics.push(PluginDiagnostic::error(
-                    imp.impl_kw(db).stable_ptr().untyped(),
-                    "`starknet::interface` does not yet support impl items.".to_string(),
+                    imp.impl_kw(db).stable_ptr(db),
+                    format!("`{INTERFACE_ATTR}` does not yet support impl items."),
                 ));
                 continue;
             }
@@ -281,46 +296,56 @@ pub fn handle_trait(db: &dyn SyntaxGroup, trait_ast: ast::ItemTrait) -> PluginRe
     let mut builder = PatchBuilder::new(db, &interface_attr);
     builder.add_modified(RewriteNode::interpolate_patched(
         &formatdoc!(
-            "$visibility$trait {dispatcher_trait_name}<T> {{$dispatcher_signatures$
+            "{DISPATCHER_DOC_GROUP_ATTR}
+            $visibility$trait {dispatcher_trait_name}<T> {{$dispatcher_signatures$
             }}
 
+            {DISPATCHER_DOC_GROUP_ATTR}
             #[derive(Copy, Drop, {STORE_TRAIT}, Serde)]
             $visibility$struct {contract_caller_name} {{
                 pub contract_address: starknet::ContractAddress,
             }}
 
+            {DISPATCHER_DOC_GROUP_ATTR}
             impl {contract_caller_name}Impl of {dispatcher_trait_name}<{contract_caller_name}> {{
             $contract_caller_method_impls$
             }}
 
+            {DISPATCHER_DOC_GROUP_ATTR}
             #[derive(Copy, Drop, {STORE_TRAIT}, Serde)]
             $visibility$struct {library_caller_name} {{
                 pub class_hash: starknet::ClassHash,
             }}
 
+            {DISPATCHER_DOC_GROUP_ATTR}
             impl {library_caller_name}Impl of {dispatcher_trait_name}<{library_caller_name}> {{
             $library_caller_method_impls$
             }}
 
+            {DISPATCHER_DOC_GROUP_ATTR}
             $visibility$trait {safe_dispatcher_trait_name}<T> {{$safe_dispatcher_signatures$
             }}
 
+            {DISPATCHER_DOC_GROUP_ATTR}
             #[derive(Copy, Drop, {STORE_TRAIT}, Serde)]
             $visibility$struct {safe_library_caller_name} {{
                 pub class_hash: starknet::ClassHash,
             }}
 
+            {DISPATCHER_DOC_GROUP_ATTR}
             impl {safe_library_caller_name}Impl of \
              {safe_dispatcher_trait_name}<{safe_library_caller_name}> {{
             $safe_library_caller_method_impls$
             }}
 
 
+            {DISPATCHER_DOC_GROUP_ATTR}
             #[derive(Copy, Drop, {STORE_TRAIT}, Serde)]
             $visibility$struct {safe_contract_caller_name} {{
                 pub contract_address: starknet::ContractAddress,
             }}
 
+            {DISPATCHER_DOC_GROUP_ATTR}
             impl {safe_contract_caller_name}Impl of \
              {safe_dispatcher_trait_name}<{safe_contract_caller_name}> {{
             $safe_contract_caller_method_impls$
@@ -360,11 +385,12 @@ pub fn handle_trait(db: &dyn SyntaxGroup, trait_ast: ast::ItemTrait) -> PluginRe
     let (content, code_mappings) = builder.build();
     PluginResult {
         code: Some(PluginGeneratedFile {
-            name: dispatcher_trait_name.into(),
+            name: dispatcher_trait_name,
             content,
             code_mappings,
             aux_data: None,
             diagnostics_note: Default::default(),
+            is_unhygienic: false,
         }),
         diagnostics,
         remove_original_item: false,
@@ -372,15 +398,15 @@ pub fn handle_trait(db: &dyn SyntaxGroup, trait_ast: ast::ItemTrait) -> PluginRe
 }
 
 /// Returns the method implementation rewrite node for a declaration.
-fn declaration_method_impl(
-    func_declaration: RewriteNode,
-    entry_point_selector: RewriteNode,
+fn declaration_method_impl<'db>(
+    func_declaration: RewriteNode<'db>,
+    entry_point_selector: RewriteNode<'db>,
     member: &str,
     syscall: &str,
-    serialization_code: Vec<RewriteNode>,
+    serialization_code: Vec<RewriteNode<'db>>,
     ret_decode: String,
     unwrap: bool,
-) -> RewriteNode {
+) -> RewriteNode<'db> {
     let deserialization_code = if ret_decode.is_empty() {
         RewriteNode::text("()")
     } else {
@@ -436,12 +462,12 @@ fn declaration_method_impl(
 }
 
 /// Returns the matching signature for a dispatcher implementation for the given declaration.
-fn dispatcher_signature(
-    db: &dyn SyntaxGroup,
-    declaration: &ast::FunctionDeclaration,
+fn dispatcher_signature<'db>(
+    db: &'db dyn Database,
+    declaration: &ast::FunctionDeclaration<'db>,
     self_type_name: &str,
     unwrap: bool,
-) -> RewriteNode {
+) -> RewriteNode<'db> {
     let mut func_declaration = RewriteNode::from_ast(declaration);
     let params = func_declaration
         .modify_child(db, ast::FunctionDeclaration::INDEX_SIGNATURE)
@@ -451,9 +477,10 @@ fn dispatcher_signature(
         .as_mut()
         .unwrap();
     let maybe_comma = if params.len() > 2 { ", " } else { "" };
-    params.splice(0..std::cmp::min(2, params.len()), [RewriteNode::Text(format!(
-        "self: {self_type_name}{maybe_comma}"
-    ))]);
+    params.splice(
+        0..std::cmp::min(2, params.len()),
+        [RewriteNode::Text(format!("self: {self_type_name}{maybe_comma}"))],
+    );
     if unwrap {
         return func_declaration;
     }

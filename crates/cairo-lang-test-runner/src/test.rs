@@ -1,3 +1,4 @@
+use cairo_lang_runner::casm_run::format_for_panic;
 use cairo_lang_sierra::program::{Program, ProgramArtifact};
 use cairo_lang_test_plugin::test_config::TestExpectation;
 use cairo_lang_test_plugin::{TestCompilationMetadata, TestConfig, TestsCompilationConfig};
@@ -5,25 +6,30 @@ use cairo_lang_utils::byte_array::BYTE_ARRAY_MAGIC;
 use itertools::Itertools;
 use starknet_types_core::felt::Felt as Felt252;
 
-use crate::{TestCompilation, TestCompiler, filter_test_cases, format_for_panic};
+use crate::{TestCompilation, TestCompiler, filter_test_cases};
 
 #[test]
 fn test_compiled_serialization() {
     use std::path::PathBuf;
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test_data");
 
-    let compiler = TestCompiler::try_new(&path, true, false, TestsCompilationConfig {
-        starknet: true,
-        add_statements_functions: false,
-        add_statements_code_locations: false,
-        contract_declarations: None,
-        contract_crate_ids: None,
-        executable_crate_ids: None,
-    })
+    let compiler = TestCompiler::try_new(
+        &path,
+        true,
+        false,
+        TestsCompilationConfig {
+            starknet: true,
+            add_statements_functions: false,
+            add_statements_code_locations: false,
+            contract_declarations: None,
+            contract_crate_ids: None,
+            executable_crate_ids: None,
+        },
+    )
     .unwrap();
     let compiled = compiler.build().unwrap();
     let serialized = serde_json::to_string_pretty(&compiled).unwrap();
-    let deserialized: TestCompilation = serde_json::from_str(&serialized).unwrap();
+    let deserialized: TestCompilation<'_> = serde_json::from_str(&serialized).unwrap();
 
     assert_eq!(compiled.sierra_program, deserialized.sierra_program);
     assert_eq!(compiled.metadata.function_set_costs, deserialized.metadata.function_set_costs);
@@ -226,15 +232,14 @@ fn test_format_for_panic() {
 
 /// Return a named test ([String], [TestConfig]) from a test name and its ignored status.
 fn to_named_test(test: &(&str, bool)) -> (String, TestConfig) {
-    (String::from(test.0), TestConfig {
-        available_gas: None,
-        expectation: TestExpectation::Success,
-        ignored: test.1,
-    })
+    (
+        String::from(test.0),
+        TestConfig { available_gas: None, expectation: TestExpectation::Success, ignored: test.1 },
+    )
 }
 
 /// Return a [TestCompilation] from a list of test names and their ignored status.
-fn to_test_compilation(tests: &[(&str, bool)]) -> TestCompilation {
+fn to_test_compilation<'db>(tests: &[(&str, bool)]) -> TestCompilation<'db> {
     TestCompilation {
         sierra_program: ProgramArtifact::stripped(Program {
             type_declarations: vec![],

@@ -117,7 +117,9 @@ pub fn simulate<
             (vec![CoreValue::GasBuiltin(gas_counter), CoreValue::Uint128(gas_counter as u128)], 0)
         }
         CoreConcreteLibfunc::Gas(
-            GasConcreteLibfunc::BuiltinWithdrawGas(_) | GasConcreteLibfunc::GetBuiltinCosts(_),
+            GasConcreteLibfunc::BuiltinWithdrawGas(_)
+            | GasConcreteLibfunc::GetBuiltinCosts(_)
+            | GasConcreteLibfunc::GetUnspentGas(_),
         ) => {
             unimplemented!("Simulation of the builtin cost functionality is not implemented yet.")
         }
@@ -199,6 +201,10 @@ pub fn simulate<
         CoreConcreteLibfunc::Bool(libfunc) => simulate_bool_libfunc(libfunc, inputs)?,
         CoreConcreteLibfunc::Felt252(libfunc) => simulate_felt252_libfunc(libfunc, inputs)?,
         CoreConcreteLibfunc::UnwrapNonZero(_) => (inputs, 0),
+        CoreConcreteLibfunc::Struct(StructConcreteLibfunc::BoxedDeconstruct(_)) => {
+            take_inputs!(let [CoreValue::Struct(members)] = inputs);
+            (members, 0)
+        }
         CoreConcreteLibfunc::Mem(
             MemConcreteLibfunc::Rename(_) | MemConcreteLibfunc::StoreTemp(_),
         )
@@ -253,14 +259,17 @@ pub fn simulate<
             // Returning the same dict since it is exactly the same as the squashed one.
             (vec![CoreValue::RangeCheck, CoreValue::Dict(dict)], 0)
         }
+        CoreConcreteLibfunc::Felt252SquashedDict(_) => {
+            unimplemented!("Simulation of Felt252SquashedDict is not implemented yet.");
+        }
         CoreConcreteLibfunc::Pedersen(_) => {
             unimplemented!("Simulation of the Pedersen hash function is not implemented yet.");
         }
         CoreConcreteLibfunc::Poseidon(_) => {
             unimplemented!("Simulation of the Poseidon hash function is not implemented yet.");
         }
-        CoreConcreteLibfunc::StarkNet(_) => {
-            unimplemented!("Simulation of the StarkNet functionalities is not implemented yet.")
+        CoreConcreteLibfunc::Starknet(_) => {
+            unimplemented!("Simulation of the Starknet functionalities is not implemented yet.")
         }
         CoreConcreteLibfunc::Nullable(_) => {
             unimplemented!("Simulation of nullable is not implemented yet.")
@@ -293,6 +302,12 @@ pub fn simulate<
         CoreConcreteLibfunc::BoundedInt(_) => unimplemented!(),
         CoreConcreteLibfunc::Circuit(_) => unimplemented!(),
         CoreConcreteLibfunc::IntRange(_) => unimplemented!(),
+        CoreConcreteLibfunc::Blake(_) => unimplemented!(),
+        CoreConcreteLibfunc::Trace(_) => unimplemented!(),
+        CoreConcreteLibfunc::QM31(_) => unimplemented!(),
+        CoreConcreteLibfunc::UnsafePanic(_) => unimplemented!(),
+        CoreConcreteLibfunc::DummyFunctionCall(_) => unimplemented!(),
+        CoreConcreteLibfunc::GasReserve(_) => unimplemented!(),
     })
 }
 

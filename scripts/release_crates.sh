@@ -1,5 +1,9 @@
 # An optional argument, '-s | --skip-first <#num_to_skip>', can be passed to skip the first #num_to_skip crates, otherwise SKIP_FIRST is set to 0.
-if [ "$1" == "-s" ] || [ "$1" == "--skip-first" ]; then
+if [ "$1" = "-s" ] || [ "$1" = "--skip-first" ]; then
+    if [ -z "$2" ]; then
+        echo "Error: --skip-first requires a numeric argument."
+        exit 1
+    fi
     SKIP_FIRST=$2
 else
     SKIP_FIRST=0
@@ -31,20 +35,23 @@ CRATES_TO_PUBLISH=(
     cairo-lang-semantic
     cairo-lang-lowering
     cairo-lang-sierra-generator
+    cairo-lang-runnable-utils
     cairo-lang-compiler
     cairo-lang-starknet-classes
     cairo-lang-starknet
-    cairo-lang-runnable-utils
+    cairo-lang-executable-plugin
     cairo-lang-executable
     cairo-lang-runner
     cairo-lang-test-plugin
     cairo-lang-test-runner
+    cairo-lang-execute-utils
     cairo-lang-doc
     cairo-compile
     cairo-format
     cairo-run
     cairo-execute
     cairo-test
+    cairo-size-profiler
     sierra-compile
     starknet-compile
     starknet-sierra-compile
@@ -54,8 +61,8 @@ CRATES_TO_PUBLISH=(
 # - 5 (the number of crates that are for internal use only).
 NUM_CRATES_IN_WORKSPACE=$(find crates/ -name Cargo.toml | wc -l)
 if [ "${#CRATES_TO_PUBLISH[@]}" -ne "$((NUM_CRATES_IN_WORKSPACE - 5))" ]; then
-    echo "The number of crates to publish is not equal to the number of crates in the workspace,
-    new crates were probably added, please update the list of crates to publish."
+    echo "The number of crates to publish is not equal to the number of crates in the workspace,"
+    echo "new crates were probably added, please update the list of crates to publish."
     exit 1
 fi
 

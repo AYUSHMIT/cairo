@@ -1,40 +1,37 @@
 //! Basic runner for running a Sierra program on the vm.
 use std::collections::HashMap;
-use std::ops::{Add, Sub};
 
 use cairo_lang_casm::hints::Hint;
 use cairo_lang_runnable_utils::builder::{BuildError, EntryCodeConfig, RunnableBuilder};
 use cairo_lang_sierra::extensions::NamedType;
-use cairo_lang_sierra::extensions::core::CoreConcreteLibfunc;
 use cairo_lang_sierra::extensions::enm::EnumType;
 use cairo_lang_sierra::extensions::gas::{CostTokenType, GasBuiltinType};
 use cairo_lang_sierra::ids::{ConcreteTypeId, GenericTypeId};
-use cairo_lang_sierra::program::{Function, GenStatement, GenericArg, StatementIdx};
+use cairo_lang_sierra::program::{Function, GenericArg};
 use cairo_lang_sierra_to_casm::metadata::MetadataComputationConfig;
 use cairo_lang_starknet::contract::ContractInfo;
 use cairo_lang_utils::casts::IntoOrPanic;
 use cairo_lang_utils::ordered_hash_map::OrderedHashMap;
-use cairo_lang_utils::unordered_hash_map::UnorderedHashMap;
 use cairo_lang_utils::{extract_matches, require};
 use cairo_vm::hint_processor::hint_processor_definition::HintProcessor;
 use cairo_vm::serde::deserialize_program::HintParams;
 use cairo_vm::types::builtin_name::BuiltinName;
 use cairo_vm::vm::errors::cairo_run_errors::CairoRunError;
 use cairo_vm::vm::runners::cairo_runner::{ExecutionResources, RunResources};
-use cairo_vm::vm::trace::trace_entry::RelocatedTraceEntry;
 use cairo_vm::vm::vm_core::VirtualMachine;
 use casm_run::hint_to_hint_params;
 pub use casm_run::{CairoHintProcessor, StarknetState};
-use itertools::{Itertools, chain};
 use num_bigint::BigInt;
 use num_traits::ToPrimitive;
-use profiling::{ProfilingInfo, user_function_idx_by_sierra_statement_idx};
+use profiling::ProfilingInfo;
 use starknet_types_core::felt::Felt as Felt252;
 use thiserror::Error;
 
-use crate::casm_run::RunFunctionResult;
+use crate::casm_run::{RunFunctionResult, StarknetHintProcessor};
+use crate::profiling::ProfilerConfig;
 
 pub mod casm_run;
+pub mod clap;
 pub mod profiling;
 pub mod short_string;
 
@@ -77,7 +74,7 @@ pub struct RunResult {
 }
 
 /// The execution resources in a run.
-/// Extends [ExecutionResources] by including the used syscalls for starknet.
+/// Extends [ExecutionResources] by including the used syscalls for Starknet.
 #[derive(Debug, Eq, PartialEq, Clone, Default)]
 pub struct StarknetExecutionResources {
     /// The basic execution resources.
@@ -105,7 +102,7 @@ pub enum RunResultValue {
     Panic(Vec<Felt252>),
 }
 
-// Approximated costs token types.
+/// Returns the approximated gas cost for each token type.
 pub fn token_gas_cost(token_type: CostTokenType) -> usize {
     match token_type {
         CostTokenType::Const => 1,
@@ -113,7 +110,7 @@ pub fn token_gas_cost(token_type: CostTokenType) -> usize {
         | CostTokenType::Hole
         | CostTokenType::RangeCheck
         | CostTokenType::RangeCheck96 => {
-            panic!("Token type {:?} has no gas cost.", token_type)
+            panic!("Token type {token_type:?} has no gas cost.")
         }
         CostTokenType::Pedersen => 4050,
         CostTokenType::Poseidon => 491,
@@ -124,14 +121,14 @@ pub fn token_gas_cost(token_type: CostTokenType) -> usize {
     }
 }
 
-/// An argument to a sierra function run,
-#[derive(Debug)]
+/// An argument to a Sierra function run.
+#[derive(Debug, Clone)]
 pub enum Arg {
     Value(Felt252),
     Array(Vec<Arg>),
 }
 impl Arg {
-    /// Returns the size of the argument in the vm.
+    /// Returns the size of the argument in the VM.
     pub fn size(&self) -> usize {
         match self {
             Self::Value(_) => 1,
@@ -145,7 +142,7 @@ impl From<Felt252> for Arg {
     }
 }
 
-/// Builds hints_dict required in cairo_vm::types::program::Program from instructions.
+/// Builds `hints_dict` required in `cairo_vm::types::program::Program` from instructions.
 pub fn build_hints_dict(
     hints: &[(usize, Vec<Hint>)],
 ) -> (HashMap<usize, Vec<HintParams>>, HashMap<String, Hint>) {
@@ -163,7 +160,20 @@ pub fn build_hints_dict(
     (hints_dict, string_to_hint)
 }
 
-/// Runner enabling running a Sierra program on the vm.
+/// A struct representing a prepared execution context for starting a function within a given
+/// Starknet state.
+///
+/// Pass fields from this object to
+/// [`SierraCasmRunner::run_function_with_prepared_starknet_context`] to run the function.
+/// For typical use-cases you should use [`SierraCasmRunner::run_function_with_starknet_context`],
+/// which does all the preparation, running, and result composition for you.
+pub struct PreparedStarknetContext {
+    pub hints_dict: HashMap<usize, Vec<HintParams>>,
+    pub bytecode: Vec<BigInt>,
+    pub builtins: Vec<BuiltinName>,
+}
+
+/// Runner enabling running a Sierra program on the VM.
 pub struct SierraCasmRunner {
     /// Builder for runnable functions.
     builder: RunnableBuilder,
@@ -179,7 +189,6 @@ impl SierraCasmRunner {
         starknet_contracts_info: OrderedHashMap<Felt252, ContractInfo>,
         run_profiler: Option<ProfilingInfoCollectionConfig>,
     ) -> Result<Self, RunnerError> {
-        // Find all contracts.
         Ok(Self {
             builder: RunnableBuilder::new(sierra_program, metadata_config)?,
             starknet_contracts_info,
@@ -187,7 +196,7 @@ impl SierraCasmRunner {
         })
     }
 
-    /// Runs the vm starting from a function in the context of a given starknet state.
+    /// Runs the VM starting from a function in the context of a given Starknet state.
     pub fn run_function_with_starknet_context(
         &self,
         func: &Function,
@@ -195,190 +204,31 @@ impl SierraCasmRunner {
         available_gas: Option<usize>,
         starknet_state: StarknetState,
     ) -> Result<RunResultStarknet, RunnerError> {
-        let (assembled_program, builtins) =
-            self.builder.assemble_function_program(func, EntryCodeConfig::testing())?;
-        let (hints_dict, string_to_hint) = build_hints_dict(&assembled_program.hints);
-        let user_args = self.prepare_args(func, available_gas, args)?;
-        let mut hint_processor = CairoHintProcessor {
-            runner: Some(self),
-            user_args,
-            starknet_state,
-            string_to_hint,
-            run_resources: RunResources::default(),
-            syscalls_used_resources: Default::default(),
-            no_temporary_segments: true,
-        };
-        let RunResult { gas_counter, memory, value, used_resources, profiling_info } = self
-            .run_function(
-                func,
-                &mut hint_processor,
-                hints_dict,
-                assembled_program.bytecode.iter(),
-                builtins,
-            )?;
-        let mut all_used_resources = hint_processor.syscalls_used_resources;
+        let (mut hint_processor, ctx) =
+            self.prepare_starknet_context(func, args, available_gas, starknet_state)?;
+        self.run_function_with_prepared_starknet_context(func, &mut hint_processor, ctx)
+    }
+
+    /// Runs the VM starting from a function in the context of a given Starknet state and a
+    /// (possibly) amended hint processor.
+    pub fn run_function_with_prepared_starknet_context(
+        &self,
+        func: &Function,
+        hint_processor: &mut dyn StarknetHintProcessor,
+        PreparedStarknetContext { hints_dict, bytecode, builtins }: PreparedStarknetContext,
+    ) -> Result<RunResultStarknet, RunnerError> {
+        let RunResult { gas_counter, memory, value, used_resources, profiling_info } =
+            self.run_function(func, hint_processor, hints_dict, bytecode.iter(), builtins)?;
+        let mut all_used_resources = hint_processor.take_syscalls_used_resources();
         all_used_resources.basic_resources += &used_resources;
         Ok(RunResultStarknet {
             gas_counter,
             memory,
             value,
-            starknet_state: hint_processor.starknet_state,
+            starknet_state: hint_processor.take_starknet_state(),
             used_resources: all_used_resources,
             profiling_info,
         })
-    }
-
-    /// Collects profiling info of the current run using the trace.
-    fn collect_profiling_info(
-        &self,
-        trace: &[RelocatedTraceEntry],
-        profiling_config: ProfilingInfoCollectionConfig,
-    ) -> ProfilingInfo {
-        let sierra_statement_info = &self.builder.casm_program().debug_info.sierra_statement_info;
-        let sierra_len = sierra_statement_info.len();
-        let bytecode_len = sierra_statement_info.last().unwrap().end_offset;
-        // The CASM program starts with a header of instructions to wrap the real program.
-        // `real_pc_0` is the PC in the trace that points to the same CASM instruction which is in
-        // the real PC=0 in the original CASM program. That is, all trace's PCs need to be
-        // subtracted by `real_pc_0` to get the real PC they point to in the original CASM
-        // program.
-        // This is the same as the PC of the last trace entry plus 1, as the header is built to have
-        // a `ret` last instruction, which must be the last in the trace of any execution.
-        // The first instruction after that is the first instruction in the original CASM program.
-
-        let real_pc_0 = trace.last().unwrap().pc.add(1);
-
-        // The function stack trace of the current function, excluding the current function (that
-        // is, the stack of the caller). Represented as a vector of indices of the functions
-        // in the stack (indices of the functions according to the list in the sierra program).
-        // Limited to depth `max_stack_trace_depth`. Note `function_stack_depth` tracks the real
-        // depth, even if >= `max_stack_trace_depth`.
-        let mut function_stack = Vec::new();
-        // Tracks the depth of the function stack, without limit. This is usually equal to
-        // `function_stack.len()`, but if the actual stack is deeper than `max_stack_trace_depth`,
-        // this remains reliable while `function_stack` does not.
-        let mut function_stack_depth = 0;
-        let mut cur_weight = 0;
-        // The key is a function stack trace (see `function_stack`, but including the current
-        // function).
-        // The value is the weight of the stack trace so far, not including the pending weight being
-        // tracked at the time.
-        let mut stack_trace_weights = OrderedHashMap::default();
-        let mut end_of_program_reached = false;
-        // The total weight of each Sierra statement.
-        // Note the header and footer (CASM instructions added for running the program by the
-        // runner). The header is not counted, and the footer is, but then the relevant
-        // entry is removed.
-        let mut sierra_statement_weights = UnorderedHashMap::default();
-        // Total weight of Sierra statements grouped by the respective (collapsed) user function
-        // call stack.
-        let mut scoped_sierra_statement_weights = OrderedHashMap::default();
-        for step in trace.iter() {
-            // Skip the header.
-            if step.pc < real_pc_0 {
-                continue;
-            }
-            let real_pc: usize = step.pc.sub(real_pc_0);
-            // Skip the footer.
-            // Also if pc is greater or equal the bytecode length it means that it is the outside
-            // ret used for e.g. getting pointer to builtins costs table, const segments
-            // etc.
-            if real_pc >= bytecode_len {
-                continue;
-            }
-
-            if end_of_program_reached {
-                unreachable!("End of program reached, but trace continues.");
-            }
-
-            cur_weight += 1;
-
-            // TODO(yuval): Maintain a map of pc to sierra statement index (only for PCs we saw), to
-            // save lookups.
-            let sierra_statement_idx = self.sierra_statement_index_by_pc(real_pc);
-            let user_function_idx = user_function_idx_by_sierra_statement_idx(
-                self.builder.sierra_program(),
-                sierra_statement_idx,
-            );
-
-            *sierra_statement_weights.entry(sierra_statement_idx).or_insert(0) += 1;
-
-            if profiling_config.collect_scoped_sierra_statement_weights {
-                // The current stack trace, including the current function (recursive calls
-                // collapsed).
-                let cur_stack: Vec<usize> =
-                    chain!(function_stack.iter().map(|&(idx, _)| idx), [user_function_idx])
-                        .dedup()
-                        .collect();
-
-                *scoped_sierra_statement_weights
-                    .entry((cur_stack, sierra_statement_idx))
-                    .or_insert(0) += 1;
-            }
-
-            let Some(gen_statement) =
-                self.builder.sierra_program().statements.get(sierra_statement_idx.0)
-            else {
-                panic!("Failed fetching statement index {}", sierra_statement_idx.0);
-            };
-
-            match gen_statement {
-                GenStatement::Invocation(invocation) => {
-                    if matches!(
-                        self.builder.registry().get_libfunc(&invocation.libfunc_id),
-                        Ok(CoreConcreteLibfunc::FunctionCall(_))
-                    ) {
-                        // Push to the stack.
-                        if function_stack_depth < profiling_config.max_stack_trace_depth {
-                            function_stack.push((user_function_idx, cur_weight));
-                            cur_weight = 0;
-                        }
-                        function_stack_depth += 1;
-                    }
-                }
-                GenStatement::Return(_) => {
-                    // Pop from the stack.
-                    if function_stack_depth <= profiling_config.max_stack_trace_depth {
-                        // The current stack trace, including the current function.
-                        let cur_stack: Vec<_> =
-                            chain!(function_stack.iter().map(|f| f.0), [user_function_idx])
-                                .collect();
-                        *stack_trace_weights.entry(cur_stack).or_insert(0) += cur_weight;
-
-                        let Some(popped) = function_stack.pop() else {
-                            // End of the program.
-                            end_of_program_reached = true;
-                            continue;
-                        };
-                        cur_weight += popped.1;
-                    }
-                    function_stack_depth -= 1;
-                }
-            }
-        }
-
-        // Remove the footer.
-        sierra_statement_weights.remove(&StatementIdx(sierra_len));
-
-        ProfilingInfo {
-            sierra_statement_weights,
-            stack_trace_weights,
-            scoped_sierra_statement_weights,
-        }
-    }
-
-    fn sierra_statement_index_by_pc(&self, pc: usize) -> StatementIdx {
-        // the `-1` here can't cause an underflow as the first statement is always at
-        // offset 0, so it is always on the left side of the
-        // partition, and thus the partition index is >0.
-        StatementIdx(
-            self.builder
-                .casm_program()
-                .debug_info
-                .sierra_statement_info
-                .partition_point(|x| x.start_offset <= pc)
-                - 1,
-        )
     }
 
     /// Extract inner type if `ty` is a panic wrapper
@@ -407,7 +257,7 @@ impl SierraCasmRunner {
         None
     }
 
-    /// Runs the vm starting from a function with custom hint processor. Function may have
+    /// Runs the VM starting from a function with a custom hint processor. The function may have
     /// implicits, but no other ref params. The cost of the function is deducted from
     /// `available_gas` before the execution begins.
     pub fn run_function<'a, Bytecode>(
@@ -432,6 +282,9 @@ impl SierraCasmRunner {
                 hint_processor,
                 hints_dict,
             )?;
+
+        // The execution from the header created by self.builder.create_entry_code().
+        // We expect the last trace entry to be the `ret` instruction at the end of the header.
         let header_end = relocated_trace.last().unwrap().pc;
         used_resources.n_steps -=
             relocated_trace.iter().position(|e| e.pc > header_end).unwrap() - 1;
@@ -441,22 +294,60 @@ impl SierraCasmRunner {
         let (results_data, gas_counter) = self.get_results_data(&return_types, &memory, ap);
         assert!(results_data.len() <= 1);
 
-        let value = if results_data.is_empty() {
+        let value = match results_data.into_iter().next() {
             // No result type - no panic.
-            RunResultValue::Success(vec![])
-        } else {
-            let (ty, values) = results_data[0].clone();
-            let inner_ty =
-                self.inner_type_from_panic_wrapper(&ty, func).map(|it| self.builder.type_size(&it));
-            Self::handle_main_return_value(inner_ty, values, &memory)
+            None => RunResultValue::Success(vec![]),
+            Some((ty, values)) => {
+                let inner_ty = self
+                    .inner_type_from_panic_wrapper(&ty, func)
+                    .map(|it| self.builder.type_size(&it));
+                Self::handle_main_return_value(inner_ty, values, &memory)
+            }
         };
 
-        let profiling_info = self
-            .run_profiler
-            .as_ref()
-            .map(|config| self.collect_profiling_info(&relocated_trace, config.clone()));
+        let Self { builder, starknet_contracts_info: _, run_profiler } = self;
+
+        // The real program starts right after the header.
+        let load_offset = header_end + 1;
+
+        let profiling_info = run_profiler.as_ref().map(|config| {
+            ProfilingInfo::from_trace(builder, load_offset, config, &relocated_trace)
+        });
 
         Ok(RunResult { gas_counter, memory, value, used_resources, profiling_info })
+    }
+
+    /// Prepares context for running a function in the context of a given Starknet state.
+    ///
+    /// The returned hint processor instance is set up for interpreting and executing the hints
+    /// provided during the Cairo program's execution. Can be customised by wrapping into a custom
+    /// hint processor implementation and passing that to the `run_function` method.
+    pub fn prepare_starknet_context(
+        &self,
+        func: &Function,
+        args: Vec<Arg>,
+        available_gas: Option<usize>,
+        starknet_state: StarknetState,
+    ) -> Result<(CairoHintProcessor<'_>, PreparedStarknetContext), RunnerError> {
+        let (assembled_program, builtins) =
+            self.builder.assemble_function_program(func, EntryCodeConfig::testing())?;
+        let (hints_dict, string_to_hint) = build_hints_dict(&assembled_program.hints);
+        let user_args = self.prepare_args(func, available_gas, args)?;
+        let hint_processor = CairoHintProcessor {
+            runner: Some(self),
+            user_args,
+            starknet_state,
+            string_to_hint,
+            run_resources: RunResources::default(),
+            syscalls_used_resources: Default::default(),
+            no_temporary_segments: true,
+            markers: Default::default(),
+            panic_traceback: Default::default(),
+        };
+        Ok((
+            hint_processor,
+            PreparedStarknetContext { hints_dict, bytecode: assembled_program.bytecode, builtins },
+        ))
     }
 
     /// Groups the args by parameters, and additionally add `gas` as the first if required.
@@ -635,6 +526,16 @@ impl ProfilingInfoCollectionConfig {
         self.max_stack_trace_depth = max_stack_depth;
         self
     }
+
+    pub fn from_profiler_config(profiler_config: &ProfilerConfig) -> Self {
+        match profiler_config {
+            ProfilerConfig::Cairo | ProfilerConfig::Sierra => Self::default(),
+            ProfilerConfig::Scoped => ProfilingInfoCollectionConfig {
+                collect_scoped_sierra_statement_weights: true,
+                ..Self::default()
+            },
+        }
+    }
 }
 
 impl Default for ProfilingInfoCollectionConfig {
@@ -647,8 +548,7 @@ impl Default for ProfilingInfoCollectionConfig {
                 if max.is_empty() {
                     MAX_STACK_TRACE_DEPTH_DEFAULT
                 } else {
-                    max.parse::<usize>()
-                        .expect("MAX_STACK_TRACE_DEPTH_DEFAULT env var is not numeric")
+                    max.parse::<usize>().expect("MAX_STACK_TRACE_DEPTH env var is not numeric")
                 }
             } else {
                 MAX_STACK_TRACE_DEPTH_DEFAULT
@@ -658,8 +558,8 @@ impl Default for ProfilingInfoCollectionConfig {
     }
 }
 
-/// Initializes a vm by adding a new segment with builtins cost and a necessary pointer at the end
-/// of the program, as well as placing the arguments at the initial ap values.
+/// Initializes a VM by adding a new segment with builtins cost and a necessary pointer at the end
+/// of the program, as well as placing the arguments at the initial AP values.
 pub fn initialize_vm(vm: &mut VirtualMachine, data_len: usize) -> Result<(), Box<CairoRunError>> {
     // Create the builtin cost segment, with dummy values.
     let builtin_cost_segment = vm.add_memory_segment();

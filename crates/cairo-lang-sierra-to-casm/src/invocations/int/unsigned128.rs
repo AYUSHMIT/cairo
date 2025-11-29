@@ -132,7 +132,7 @@ fn build_u128_mul_guarantee_verify(
         tempvar a0;
         tempvar a1;
         const u64_limit = u64::MAX as u128 + 1;
-        // Break a into two 64bit halves s.t. a = a1 * 2**64 + a0.
+        // Break a into two 64-bit halves s.t. a = a1 * 2**64 + a0.
         hint DivMod { lhs: a, rhs: u64_limit } into { quotient: a1, remainder: a0 };
 
         // Verify that a0 < 2**64 by constraining a0 + (2**128-1) - (2**64-1) < 2**128.
@@ -230,7 +230,7 @@ fn build_u128_mul_guarantee_verify(
     ))
 }
 
-/// Handles a casting a felt252 into u128.
+/// Handles casting a felt252 into u128.
 fn build_u128_from_felt252(
     builder: CompiledInvocationBuilder<'_>,
 ) -> Result<CompiledInvocation, InvocationError> {
@@ -353,7 +353,7 @@ pub fn build_u128_byte_reverse(
     // Next, we divide by 2 ** (8 + 16 + 32) and get [b7, b6, b5, b4, b3, b2, b1, b0].
     let mut temp = input;
     let mut shift = BigInt::from(1 << 16);
-    for mask_imm in masks.into_iter() {
+    for mask_imm in masks {
         let shift_imm = &shift - BigInt::one();
         casm_build_extend! {casm_builder,
             assert temp = *(bitwise++);

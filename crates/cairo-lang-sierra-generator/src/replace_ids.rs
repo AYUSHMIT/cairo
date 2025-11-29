@@ -1,6 +1,7 @@
 use cairo_lang_debug::DebugWithDb;
 use cairo_lang_sierra::program;
-use cairo_lang_utils::{LookupIntern, extract_matches};
+use cairo_lang_utils::extract_matches;
+use salsa::Database;
 
 use crate::db::{SierraGenGroup, SierraGeneratorTypeLongId};
 use crate::pre_sierra::{self, PushValue};
@@ -86,14 +87,14 @@ pub trait SierraIdReplacer {
 ///  - For types: `felt252` or `Box<Box<felt252>>`.
 ///  - For user functions: `test::foo`.
 pub struct DebugReplacer<'a> {
-    pub db: &'a dyn SierraGenGroup,
+    pub db: &'a dyn Database,
 }
 impl SierraIdReplacer for DebugReplacer<'_> {
     fn replace_libfunc_id(
         &self,
         id: &cairo_lang_sierra::ids::ConcreteLibfuncId,
     ) -> cairo_lang_sierra::ids::ConcreteLibfuncId {
-        let mut long_id = id.lookup_intern(self.db);
+        let mut long_id = self.db.lookup_concrete_lib_func(id);
         self.replace_generic_args(&mut long_id.generic_args);
         cairo_lang_sierra::ids::ConcreteLibfuncId {
             id: id.id,
@@ -105,9 +106,9 @@ impl SierraIdReplacer for DebugReplacer<'_> {
         &self,
         id: &cairo_lang_sierra::ids::ConcreteTypeId,
     ) -> cairo_lang_sierra::ids::ConcreteTypeId {
-        match id.lookup_intern(self.db) {
+        match self.db.lookup_concrete_type(id) {
             SierraGeneratorTypeLongId::Phantom(ty)
-            | SierraGeneratorTypeLongId::CycleBreaker(ty) => ty.format(self.db.upcast()).into(),
+            | SierraGeneratorTypeLongId::CycleBreaker(ty) => ty.format(self.db).into(),
             SierraGeneratorTypeLongId::Regular(long_id) => {
                 let mut long_id = long_id.as_ref().clone();
                 self.replace_generic_args(&mut long_id.generic_args);
@@ -138,18 +139,16 @@ impl SierraIdReplacer for DebugReplacer<'_> {
         &self,
         sierra_id: &cairo_lang_sierra::ids::FunctionId,
     ) -> cairo_lang_sierra::ids::FunctionId {
-        let semantic_id = sierra_id.lookup_intern(self.db);
+        let lowering_id = self.db.lookup_sierra_function(sierra_id);
         cairo_lang_sierra::ids::FunctionId {
             id: sierra_id.id,
-            debug_name: Some(
-                format!("{:?}", semantic_id.lookup_intern(self.db).debug(self.db.upcast())).into(),
-            ),
+            debug_name: Some(format!("{:?}", lowering_id.long(self.db).debug(self.db)).into()),
         }
     }
 }
 
 impl DebugReplacer<'_> {
-    /// Enriches the function entries with their full function name. Required for tests and cairo
+    /// Enriches the function entries with their full function name. Required for tests and Cairo
     /// running.
     pub fn enrich_function_names(&self, program: &mut cairo_lang_sierra::program::Program) {
         for function in &mut program.funcs {
@@ -158,10 +157,10 @@ impl DebugReplacer<'_> {
     }
 }
 
-pub fn replace_sierra_ids(
-    db: &dyn SierraGenGroup,
-    statement: &pre_sierra::StatementWithLocation,
-) -> pre_sierra::StatementWithLocation {
+pub fn replace_sierra_ids<'db>(
+    db: &'db dyn Database,
+    statement: &pre_sierra::StatementWithLocation<'db>,
+) -> pre_sierra::StatementWithLocation<'db> {
     let replacer = DebugReplacer { db };
     match &statement.statement {
         pre_sierra::Statement::Sierra(cairo_lang_sierra::program::GenStatement::Invocation(p)) => {
@@ -205,7 +204,7 @@ pub fn replace_sierra_ids(
 ///
 /// Similar to [replace_sierra_ids] except that it acts on [cairo_lang_sierra::program::Program].
 pub fn replace_sierra_ids_in_program(
-    db: &dyn SierraGenGroup,
+    db: &dyn Database,
     program: &cairo_lang_sierra::program::Program,
 ) -> cairo_lang_sierra::program::Program {
     DebugReplacer { db }.apply(program)

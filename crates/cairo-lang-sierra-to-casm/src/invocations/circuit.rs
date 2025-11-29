@@ -273,9 +273,11 @@ fn build_circuit_eval(
             // Success.
             (
                 "Fallthrough",
-                &[&[new_add_mod], &[new_mul_mod], &[
-                    values, modulus0, modulus1, modulus2, modulus3,
-                ]],
+                &[
+                    &[new_add_mod],
+                    &[new_mul_mod],
+                    &[values, modulus0, modulus1, modulus2, modulus3],
+                ],
                 None,
             ),
             (
@@ -304,7 +306,7 @@ fn build_circuit_eval(
     ))
 }
 
-/// Generates casm instructions for `try_into_circuit_modulus()`.
+/// Generates CASM instructions for `try_into_circuit_modulus()`.
 fn build_try_into_circuit_modulus(
     builder: CompiledInvocationBuilder<'_>,
 ) -> Result<CompiledInvocation, InvocationError> {
@@ -441,10 +443,14 @@ fn build_failure_guarantee_verify(
         casm_builder,
         [(
             "Fallthrough",
-            &[&[rc96], &[new_mul_mod], &[
-                nullifier0, nullifier1, nullifier2, nullifier3, modulus0, modulus1, modulus2,
-                modulus3,
-            ]],
+            &[
+                &[rc96],
+                &[new_mul_mod],
+                &[
+                    nullifier0, nullifier1, nullifier2, nullifier3, modulus0, modulus1, modulus2,
+                    modulus3,
+                ],
+            ],
             None,
         )],
         CostValidationInfo {
@@ -503,9 +509,10 @@ fn build_get_output(
         casm_builder,
         [(
             "Fallthrough",
-            &[&[output0, output1, output2, output3], &[
-                output0, output1, output2, output3, modulus0, modulus1, modulus2, modulus3,
-            ]],
+            &[
+                &[output0, output1, output2, output3],
+                &[output0, output1, output2, output3, modulus0, modulus1, modulus2, modulus3],
+            ],
             None,
         )],
         Default::default(),

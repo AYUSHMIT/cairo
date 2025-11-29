@@ -8,9 +8,14 @@ skipped tokens
 
 //! > expected_diagnostics
 error: Skipped tokens. Expected: Const/Enum/ExternFunction/ExternType/Function/Impl/InlineMacro/Module/Struct/Trait/TypeAlias/Use or an attribute.
- --> dummy_file.cairo:1:1
+ --> dummy_file.cairo:1:8
 skipped tokens
-^************^
+       ^
+
+error: Skipped tokens. Expected: Const/Enum/ExternFunction/ExternType/Function/Impl/InlineMacro/Module/Struct/Trait/TypeAlias/Use or an attribute.
+ --> dummy_file.cairo:1:15
+skipped tokens
+              ^
 
 //! > ==========================================================================
 
@@ -26,9 +31,14 @@ fn bar() {}
 
 //! > expected_diagnostics
 error: Skipped tokens. Expected: Const/Enum/ExternFunction/ExternType/Function/Impl/InlineMacro/Module/Struct/Trait/TypeAlias/Use or an attribute.
- --> dummy_file.cairo:2:1
+ --> dummy_file.cairo:2:8
 skipped tokens
-^************^
+       ^
+
+error: Skipped tokens. Expected: Const/Enum/ExternFunction/ExternType/Function/Impl/InlineMacro/Module/Struct/Trait/TypeAlias/Use or an attribute.
+ --> dummy_file.cairo:2:15
+skipped tokens
+              ^
 
 //! > ==========================================================================
 
@@ -42,9 +52,14 @@ skipped   tokens
 
 //! > expected_diagnostics
 error: Skipped tokens. Expected: Const/Enum/ExternFunction/ExternType/Function/Impl/InlineMacro/Module/Struct/Trait/TypeAlias/Use or an attribute.
- --> dummy_file.cairo:1:1
+ --> dummy_file.cairo:1:8
 skipped   tokens
-^**************^
+       ^
+
+error: Skipped tokens. Expected: Const/Enum/ExternFunction/ExternType/Function/Impl/InlineMacro/Module/Struct/Trait/TypeAlias/Use or an attribute.
+ --> dummy_file.cairo:1:17
+skipped   tokens
+                ^
 
 //! > ==========================================================================
 
@@ -60,13 +75,23 @@ skipped  \\ Comment
 
 //! > expected_diagnostics
 error: Skipped tokens. Expected: Const/Enum/ExternFunction/ExternType/Function/Impl/InlineMacro/Module/Struct/Trait/TypeAlias/Use or an attribute.
- --> dummy_file.cairo:1:1
+ --> dummy_file.cairo:1:8
 skipped  \\ Comment
-^*****************^
+       ^^^^
+
+error: Skipped tokens. Expected: Const/Enum/ExternFunction/ExternType/Function/Impl/InlineMacro/Module/Struct/Trait/TypeAlias/Use or an attribute.
+ --> dummy_file.cairo:1:20
+skipped  \\ Comment
+                   ^
+
+error: Skipped tokens. Expected: Const/Enum/ExternFunction/ExternType/Function/Impl/InlineMacro/Module/Struct/Trait/TypeAlias/Use or an attribute.
+ --> dummy_file.cairo:3:9
+  tokens
+        ^
 
 //! > ==========================================================================
 
-//! > Test consecutive skipped tokens diagnostic with trailing and leading trivia between them and good tokens tokens after them.
+//! > Test consecutive skipped tokens diagnostic with trailing and leading trivia between them and good tokens after them.
 
 //! > test_runner_name
 get_diagnostics
@@ -78,6 +103,16 @@ skipped  \\ Comment
 
 //! > expected_diagnostics
 error: Skipped tokens. Expected: Const/Enum/ExternFunction/ExternType/Function/Impl/InlineMacro/Module/Struct/Trait/TypeAlias/Use or an attribute.
- --> dummy_file.cairo:1:1
+ --> dummy_file.cairo:1:8
 skipped  \\ Comment
-^*****************^
+       ^^^^
+
+error: Skipped tokens. Expected: Const/Enum/ExternFunction/ExternType/Function/Impl/InlineMacro/Module/Struct/Trait/TypeAlias/Use or an attribute.
+ --> dummy_file.cairo:1:20
+skipped  \\ Comment
+                   ^
+
+error: Skipped tokens. Expected: Const/Enum/ExternFunction/ExternType/Function/Impl/InlineMacro/Module/Struct/Trait/TypeAlias/Use or an attribute.
+ --> dummy_file.cairo:3:9
+  tokens  fn foo() {}
+        ^

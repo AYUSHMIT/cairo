@@ -21,7 +21,7 @@ loop {
 error: Loop has incompatible return types: "core::integer::u32" and "core::integer::u16"
  --> lib.cairo:6:15
         break 3_u16;
-              ^***^
+              ^^^^^
 
 //! > expected_semantics
 Loop(
@@ -32,11 +32,13 @@ Loop(
                 tail: Some(
                     If(
                         ExprIf {
-                            condition: BoolExpr(
-                                Var(
-                                    LocalVarId(test::cond),
+                            conditions: [
+                                BoolExpr(
+                                    Var(
+                                        LocalVarId(test::cond),
+                                    ),
                                 ),
-                            ),
+                            ],
                             if_block: Block(
                                 ExprBlock {
                                     statements: [
@@ -115,7 +117,7 @@ loop {
 error: Loop has incompatible return types: "core::integer::u32" and "core::integer::u16"
  --> lib.cairo:6:15
         break 3 + 3_u16;
-              ^*******^
+              ^^^^^^^^^
 
 //! > expected_semantics
 Loop(
@@ -126,11 +128,13 @@ Loop(
                 tail: Some(
                     If(
                         ExprIf {
-                            condition: BoolExpr(
-                                Var(
-                                    LocalVarId(test::cond),
+                            conditions: [
+                                BoolExpr(
+                                    Var(
+                                        LocalVarId(test::cond),
+                                    ),
                                 ),
-                            ),
+                            ],
                             if_block: Block(
                                 ExprBlock {
                                     statements: [
@@ -179,7 +183,7 @@ Loop(
                                                     expr_option: Some(
                                                         FunctionCall(
                                                             ExprFunctionCall {
-                                                                function: ?3::add,
+                                                                function: ?2::add,
                                                                 args: [
                                                                     Value(
                                                                         Literal(

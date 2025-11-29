@@ -4,10 +4,11 @@ mod test;
 pub mod consts;
 
 use cairo_lang_defs::plugin::{MacroPlugin, MacroPluginMetadata, PluginResult};
-use cairo_lang_syntax::node::db::SyntaxGroup;
+use cairo_lang_filesystem::ids::SmolStrId;
 use cairo_lang_syntax::node::helpers::QueryAttrs;
-use cairo_lang_syntax::node::{Terminal, ast};
+use cairo_lang_syntax::node::{TypedSyntaxNode, ast};
 use consts::*;
+use salsa::Database;
 
 pub mod aux_data;
 mod derive;
@@ -28,15 +29,15 @@ use self::starknet_module::{handle_module, handle_module_by_storage};
 
 #[derive(Debug, Default)]
 #[non_exhaustive]
-pub struct StarkNetPlugin;
+pub struct StarknetPlugin;
 
-impl MacroPlugin for StarkNetPlugin {
-    fn generate_code(
+impl MacroPlugin for StarknetPlugin {
+    fn generate_code<'db>(
         &self,
-        db: &dyn SyntaxGroup,
-        item_ast: ast::ModuleItem,
+        db: &'db dyn Database,
+        item_ast: ast::ModuleItem<'db>,
         metadata: &MacroPluginMetadata<'_>,
-    ) -> PluginResult {
+    ) -> PluginResult<'db> {
         match item_ast {
             ast::ModuleItem::Module(module_ast) => handle_module(db, module_ast),
             ast::ModuleItem::Trait(trait_ast) => handle_trait(db, trait_ast),
@@ -52,7 +53,12 @@ impl MacroPlugin for StarkNetPlugin {
                 handle_derive(db, item_ast, metadata)
             }
             ast::ModuleItem::InlineMacro(inline_macro_ast)
-                if inline_macro_ast.name(db).text(db) == COMPONENT_INLINE_MACRO =>
+                if inline_macro_ast
+                    .path(db)
+                    .as_syntax_node()
+                    .get_text_without_trivia(db)
+                    .long(db)
+                    == COMPONENT_INLINE_MACRO =>
             {
                 // The macro is expanded in handle_module_by_storage, but we also need to remove the
                 // original code.
@@ -63,32 +69,32 @@ impl MacroPlugin for StarkNetPlugin {
         }
     }
 
-    fn declared_attributes(&self) -> Vec<String> {
+    fn declared_attributes<'db>(&self, db: &'db dyn Database) -> Vec<SmolStrId<'db>> {
         vec![
-            ABI_ATTR.to_string(),
-            COMPONENT_ATTR.to_string(),
-            CONSTRUCTOR_ATTR.to_string(),
-            CONTRACT_ATTR.to_string(),
-            EMBEDDABLE_AS_ATTR.to_string(),
-            EMBEDDABLE_ATTR.to_string(),
-            EVENT_ATTR.to_string(),
-            EXTERNAL_ATTR.to_string(),
-            FLAT_ATTR.to_string(),
-            INTERFACE_ATTR.to_string(),
-            KEY_ATTR.to_string(),
-            L1_HANDLER_ATTR.to_string(),
-            NESTED_ATTR.to_string(),
-            RAW_OUTPUT_ATTR.to_string(),
-            STORAGE_ATTR.to_string(),
-            SUBSTORAGE_ATTR.to_string(),
+            SmolStrId::from(db, ABI_ATTR),
+            SmolStrId::from(db, COMPONENT_ATTR),
+            SmolStrId::from(db, CONSTRUCTOR_ATTR),
+            SmolStrId::from(db, CONTRACT_ATTR),
+            SmolStrId::from(db, EMBEDDABLE_AS_ATTR),
+            SmolStrId::from(db, EMBEDDABLE_ATTR),
+            SmolStrId::from(db, EVENT_ATTR),
+            SmolStrId::from(db, EXTERNAL_ATTR),
+            SmolStrId::from(db, FLAT_ATTR),
+            SmolStrId::from(db, INTERFACE_ATTR),
+            SmolStrId::from(db, KEY_ATTR),
+            SmolStrId::from(db, L1_HANDLER_ATTR),
+            SmolStrId::from(db, NESTED_ATTR),
+            SmolStrId::from(db, RAW_OUTPUT_ATTR),
+            SmolStrId::from(db, STORAGE_ATTR),
+            SmolStrId::from(db, SUBSTORAGE_ATTR),
         ]
     }
 
-    fn declared_derives(&self) -> Vec<String> {
-        vec![EVENT_TRAIT.to_string(), STORE_TRAIT.to_string()]
+    fn declared_derives<'db>(&self, db: &'db dyn Database) -> Vec<SmolStrId<'db>> {
+        vec![SmolStrId::from(db, EVENT_TRAIT), SmolStrId::from(db, STORE_TRAIT)]
     }
 
-    fn phantom_type_attributes(&self) -> Vec<String> {
-        vec![STORAGE_ATTR.to_string()]
+    fn phantom_type_attributes<'db>(&self, db: &'db dyn Database) -> Vec<SmolStrId<'db>> {
+        vec![SmolStrId::from(db, STORAGE_ATTR)]
     }
 }

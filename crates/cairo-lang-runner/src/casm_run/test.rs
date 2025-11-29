@@ -130,6 +130,8 @@ fn test_runner(function: CasmContext, n_returns: usize, expected: &[i128]) {
         run_resources: RunResources::default(),
         syscalls_used_resources: Default::default(),
         no_temporary_segments: true,
+        markers: Default::default(),
+        panic_traceback: Default::default(),
     };
 
     let RunFunctionResult { ap, memory, .. } =
@@ -159,6 +161,8 @@ fn test_allocate_segment() {
         run_resources: RunResources::default(),
         syscalls_used_resources: Default::default(),
         no_temporary_segments: true,
+        markers: Default::default(),
+        panic_traceback: Default::default(),
     };
 
     let RunFunctionResult { ap, memory, .. } =

@@ -24,7 +24,7 @@ End:
 
 //! > ==========================================================================
 
-//! > Test unreachable code.
+//! > Test unreachable code by return.
 
 //! > test_runner_name
 test_function_lowering(expect_diagnostics: true)
@@ -46,9 +46,12 @@ foo
 
 //! > lowering_diagnostics
 warning: Unreachable code
- --> lib.cairo:3:5
-    5;
-    ^^
+ --> lib.cairo:3:5-5:5
+      5;
+ _____^
+|     6;
+|     7
+|_____^
 
 //! > lowering_flat
 Parameters: v0: core::felt252
@@ -64,11 +67,11 @@ End:
 //! > Test unreachable code by match.
 
 //! > test_runner_name
-test_function_lowering(expect_diagnostics: false)
+test_function_lowering(expect_diagnostics: warnings_only)
 
 //! > function
 fn foo(a: never) -> felt252 {
-    match a {};
+    match a {}
     1 + 2
 }
 
@@ -80,6 +83,10 @@ foo
 //! > semantic_diagnostics
 
 //! > lowering_diagnostics
+warning: Unreachable code
+ --> lib.cairo:3:5
+    1 + 2
+    ^^^^^
 
 //! > lowering_flat
 Parameters: v0: core::never
@@ -88,6 +95,40 @@ Statements:
 End:
   Match(match_enum(v0) {
   })
+
+//! > ==========================================================================
+
+//! > Test unreachable code by loop.
+
+//! > test_runner_name
+test_function_lowering(expect_diagnostics: warnings_only)
+
+//! > function
+fn foo() -> felt252 {
+    loop {}
+    1
+}
+
+//! > function_name
+foo
+
+//! > module_code
+
+//! > semantic_diagnostics
+
+//! > lowering_diagnostics
+warning: Unreachable code
+ --> lib.cairo:3:5
+    1
+    ^
+
+//! > lowering_flat
+Parameters: v0: core::RangeCheck, v1: core::gas::GasBuiltin
+blk0 (root):
+Statements:
+  (v2: core::RangeCheck, v3: core::gas::GasBuiltin, v4: core::panics::PanicResult::<(core::felt252,)>) <- test::foo[22-34](v0, v1)
+End:
+  Return(v2, v3, v4)
 
 //! > ==========================================================================
 
@@ -134,7 +175,7 @@ fn foo(a: felt252) -> felt252 {
     {
         x;
     }
-    let _y = if 1 == 1 {
+    let _y = if a == 1 {
         6
     } else {
         7
@@ -167,63 +208,59 @@ End:
 blk1:
 Statements:
   (v7: core::felt252) <- 1
-  (v8: core::felt252) <- 1
-  (v9: core::felt252) <- core::felt252_sub(v7, v8)
+  (v8: core::felt252) <- core::felt252_sub(v2, v7)
 End:
-  Match(match core::felt252_is_zero(v9) {
+  Match(match core::felt252_is_zero(v8) {
     IsZeroResult::Zero => blk2,
-    IsZeroResult::NonZero(v10) => blk3,
+    IsZeroResult::NonZero(v9) => blk3,
   })
 
 blk2:
 Statements:
+  (v10: core::gas::GasBuiltin) <- core::gas::redeposit_gas(v4)
 End:
-  Goto(blk4, {})
+  Goto(blk4, {v10 -> v11})
 
 blk3:
 Statements:
+  (v12: core::gas::GasBuiltin) <- core::gas::redeposit_gas(v4)
 End:
-  Goto(blk4, {})
+  Goto(blk4, {v12 -> v11})
 
 blk4:
 Statements:
-  (v11: core::felt252) <- 3
-  (v12: core::RangeCheck, v13: core::gas::GasBuiltin, v14: core::panics::PanicResult::<(core::felt252,)>) <- test::foo(v3, v4, v11)
+  (v13: core::felt252) <- 3
+  (v14: core::RangeCheck, v15: core::gas::GasBuiltin, v16: core::panics::PanicResult::<(core::felt252,)>) <- test::foo(v3, v11, v13)
 End:
-  Match(match_enum(v14) {
-    PanicResult::Ok(v15) => blk5,
-    PanicResult::Err(v16) => blk6,
+  Match(match_enum(v16) {
+    PanicResult::Ok(v17) => blk5,
+    PanicResult::Err(v18) => blk6,
   })
 
 blk5:
 Statements:
-  (v17: core::felt252) <- struct_destructure(v15)
-  (v18: core::felt252) <- 5
-  (v19: core::felt252) <- 0
-  (v20: core::felt252) <- core::felt252_add(v2, v19)
-  (v21: core::felt252) <- core::felt252_mul(v18, v20)
-  (v22: core::felt252) <- core::felt252_add(v17, v21)
-  (v23: (core::felt252,)) <- struct_construct(v22)
-  (v24: core::panics::PanicResult::<(core::felt252,)>) <- PanicResult::Ok(v23)
+  (v19: core::gas::GasBuiltin) <- core::gas::redeposit_gas(v15)
+  (v20: core::felt252) <- struct_destructure(v17)
+  (v21: core::felt252) <- 5
+  (v22: core::felt252) <- core::felt252_mul(v21, v2)
+  (v23: core::felt252) <- core::felt252_add(v20, v22)
+  (v24: (core::felt252,)) <- struct_construct(v23)
+  (v25: core::panics::PanicResult::<(core::felt252,)>) <- PanicResult::Ok(v24)
 End:
-  Return(v12, v13, v24)
+  Return(v14, v19, v25)
 
 blk6:
 Statements:
-  (v25: core::panics::PanicResult::<(core::felt252,)>) <- PanicResult::Err(v16)
+  (v26: core::panics::PanicResult::<(core::felt252,)>) <- PanicResult::Err(v18)
 End:
-  Return(v12, v13, v25)
+  Return(v14, v15, v26)
 
 blk7:
 Statements:
-  (v26: core::array::Array::<core::felt252>) <- core::array::array_new::<core::felt252>()
-  (v27: core::felt252) <- 375233589013918064796019
-  (v28: core::array::Array::<core::felt252>) <- core::array::array_append::<core::felt252>(v26, v27)
-  (v29: core::panics::Panic) <- struct_construct()
-  (v30: (core::panics::Panic, core::array::Array::<core::felt252>)) <- struct_construct(v29, v28)
-  (v31: core::panics::PanicResult::<(core::felt252,)>) <- PanicResult::Err(v30)
+  (v27: (core::panics::Panic, core::array::Array::<core::felt252>)) <- core::panic_with_const_felt252::<375233589013918064796019>()
+  (v28: core::panics::PanicResult::<(core::felt252,)>) <- PanicResult::Err(v27)
 End:
-  Return(v5, v6, v31)
+  Return(v5, v6, v28)
 
 //! > ==========================================================================
 
@@ -252,7 +289,7 @@ foo
 enum MyEnum {
     A: (),
     B: felt252,
-    C: Box::<((), felt252)>,
+    C: Box<((), felt252)>,
 }
 
 //! > semantic_diagnostics
@@ -283,10 +320,9 @@ End:
 
 blk3:
 Statements:
-  (v5: ((), core::felt252)) <- core::box::unbox::<((), core::felt252)>(v3)
-  (v6: core::felt252) <- 7
+  (v5: core::felt252) <- 7
 End:
-  Return(v6)
+  Return(v5)
 
 //! > ==========================================================================
 
@@ -296,7 +332,7 @@ End:
 test_function_lowering(expect_diagnostics: false)
 
 //! > function
-fn foo(a: Array::<felt252, 5>) -> felt252 {
+fn foo(a: Array<felt252, 5>) -> felt252 {
     felt252_const::<17>()
 }
 
@@ -364,7 +400,7 @@ End:
 test_function_lowering(expect_diagnostics: true)
 
 //! > function
-fn foo(mut data: Span::<felt252>) -> u128 {
+fn foo(mut data: Span<felt252>) -> u128 {
     serde::Serde::<u128>::deserialize(ref data)
 }
 
@@ -375,9 +411,9 @@ foo
 
 //! > semantic_diagnostics
 error: Unexpected return type. Expected: "core::integer::u128", found: "core::option::Option::<core::integer::u128>".
- --> lib.cairo:1:38
-fn foo(mut data: Span::<felt252>) -> u128 {
-                                     ^**^
+ --> lib.cairo:1:36
+fn foo(mut data: Span<felt252>) -> u128 {
+                                   ^^^^
 
 //! > lowering_diagnostics
 

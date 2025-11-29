@@ -1,8 +1,8 @@
 #[cfg(not(feature = "std"))]
 use alloc::{string::ToString, vec};
 
+use cairo_lang_test_utils::test;
 use indoc::indoc;
-use test_log::test;
 
 use crate::hints::CoreHint;
 use crate::instructions::{
@@ -94,8 +94,11 @@ fn test_instruction_with_hint() {
         hints: vec![CoreHint::AllocSegment { dst }.into()],
     };
 
-    assert_eq!(abs_jmp_insn.to_string(), indoc! {"
+    assert_eq!(
+        abs_jmp_insn.to_string(),
+        indoc! {"
             %{ memory[ap + 5] = segments.add() %}
             jmp abs 3"
-    });
+        }
+    );
 }

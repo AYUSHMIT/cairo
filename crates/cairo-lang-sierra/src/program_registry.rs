@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 
-use cairo_lang_utils::ordered_hash_map::OrderedHashMap;
 use itertools::{chain, izip};
 use thiserror::Error;
 
@@ -67,6 +66,10 @@ pub enum ProgramRegistryError {
     MultipleJumpsToSameStatement { src1: StatementIdx, src2: StatementIdx, dst: StatementIdx },
     #[error("#{0}: Jump out of range")]
     JumpOutOfRange(StatementIdx),
+    #[error("Type size computation failed for `{ty}`: missing size information for `{dep}`")]
+    TypeSizeDependencyMissing { ty: ConcreteTypeId, dep: ConcreteTypeId },
+    #[error("Type size computation failed for `{0}`: size overflow.")]
+    TypeSizeOverflow(ConcreteTypeId),
 }
 
 type TypeMap<TType> = HashMap<ConcreteTypeId, TType>;
@@ -87,29 +90,24 @@ pub struct ProgramRegistry<TType: GenericType, TLibfunc: GenericLibfunc> {
 }
 impl<TType: GenericType, TLibfunc: GenericLibfunc> ProgramRegistry<TType, TLibfunc> {
     /// Create a registry for the program.
-    pub fn new_with_ap_change(
+    pub fn new(
         program: &Program,
-        function_ap_change: OrderedHashMap<FunctionId, usize>,
     ) -> Result<ProgramRegistry<TType, TLibfunc>, Box<ProgramRegistryError>> {
         let functions = get_functions(program)?;
         let (concrete_types, concrete_type_ids) = get_concrete_types_maps::<TType>(program)?;
-        let concrete_libfuncs =
-            get_concrete_libfuncs::<TType, TLibfunc>(program, &SpecializationContextForRegistry {
+        let concrete_libfuncs = get_concrete_libfuncs::<TType, TLibfunc>(
+            program,
+            &SpecializationContextForRegistry {
                 functions: &functions,
                 concrete_type_ids: &concrete_type_ids,
                 concrete_types: &concrete_types,
-                function_ap_change,
-            })?;
+            },
+        )?;
         let registry = ProgramRegistry { functions, concrete_types, concrete_libfuncs };
         registry.validate(program)?;
         Ok(registry)
     }
 
-    pub fn new(
-        program: &Program,
-    ) -> Result<ProgramRegistry<TType, TLibfunc>, Box<ProgramRegistryError>> {
-        Self::new_with_ap_change(program, Default::default())
-    }
     /// Gets a function from the input program.
     pub fn get_function<'a>(
         &'a self,
@@ -210,13 +208,13 @@ impl<TType: GenericType, TLibfunc: GenericLibfunc> ProgramRegistry<TType, TLibfu
                     branch_index,
                 )));
             }
-            if !matches!(libfunc_branch.ap_change, SierraApChange::BranchAlign) {
-                if let Some(prev) = branches.get(&index) {
-                    return Err(Box::new(ProgramRegistryError::BranchNotToBranchAlign {
-                        src: *prev,
-                        dst: index,
-                    }));
-                }
+            if !matches!(libfunc_branch.ap_change, SierraApChange::BranchAlign)
+                && let Some(prev) = branches.get(&index)
+            {
+                return Err(Box::new(ProgramRegistryError::BranchNotToBranchAlign {
+                    src: *prev,
+                    dst: index,
+                }));
             }
             let next = index.next(&invocation_branch.target);
             if next.0 >= program.statements.len() {
@@ -290,13 +288,16 @@ fn get_concrete_types_maps<TType: GenericType>(
             let TypeDeclaration { id, long_id, declared_type_info } = declaration;
             let DeclaredTypeInfo { storable, droppable, duplicatable, zero_sized } =
                 declared_type_info.as_ref().cloned()?;
-            Some((id.clone(), TypeInfo {
-                long_id: long_id.clone(),
-                storable,
-                droppable,
-                duplicatable,
-                zero_sized,
-            }))
+            Some((
+                id.clone(),
+                TypeInfo {
+                    long_id: long_id.clone(),
+                    storable,
+                    droppable,
+                    duplicatable,
+                    zero_sized,
+                },
+            ))
         })
         .collect();
     for declaration in &program.type_declarations {
@@ -315,12 +316,12 @@ fn get_concrete_types_maps<TType: GenericType>(
             })
         })?;
         // Check that the info is consistent with declaration.
-        if let Some(declared_info) = declared_type_info.get(&declaration.id) {
-            if concrete_type.info() != declared_info {
-                return Err(Box::new(ProgramRegistryError::TypeInfoDeclarationMismatch(
-                    declaration.id.clone(),
-                )));
-            }
+        if let Some(declared_info) = declared_type_info.get(&declaration.id)
+            && concrete_type.info() != declared_info
+        {
+            return Err(Box::new(ProgramRegistryError::TypeInfoDeclarationMismatch(
+                declaration.id.clone(),
+            )));
         }
 
         match concrete_types.entry(declaration.id.clone()) {
@@ -346,8 +347,6 @@ pub struct SpecializationContextForRegistry<'a, TType: GenericType> {
     pub functions: &'a FunctionMap,
     pub concrete_type_ids: &'a ConcreteTypeIdMap<'a>,
     pub concrete_types: &'a TypeMap<TType::Concrete>,
-    /// AP changes information for Sierra user functions.
-    pub function_ap_change: OrderedHashMap<FunctionId, usize>,
 }
 impl<TType: GenericType> TypeSpecializationContext for SpecializationContextForRegistry<'_, TType> {
     fn try_get_type_info(&self, id: ConcreteTypeId) -> Option<TypeInfo> {
@@ -368,26 +367,10 @@ impl<TType: GenericType> SignatureSpecializationContext
     fn try_get_function_signature(&self, function_id: &FunctionId) -> Option<FunctionSignature> {
         self.try_get_function(function_id).map(|f| f.signature)
     }
-
-    fn as_type_specialization_context(&self) -> &dyn TypeSpecializationContext {
-        self
-    }
-
-    fn try_get_function_ap_change(&self, function_id: &FunctionId) -> Option<SierraApChange> {
-        Some(if self.function_ap_change.contains_key(function_id) {
-            SierraApChange::Known { new_vars_only: false }
-        } else {
-            SierraApChange::Unknown
-        })
-    }
 }
 impl<TType: GenericType> SpecializationContext for SpecializationContextForRegistry<'_, TType> {
     fn try_get_function(&self, function_id: &FunctionId) -> Option<Function> {
         self.functions.get(function_id).cloned()
-    }
-
-    fn upcast(&self) -> &dyn SignatureSpecializationContext {
-        self
     }
 }
 

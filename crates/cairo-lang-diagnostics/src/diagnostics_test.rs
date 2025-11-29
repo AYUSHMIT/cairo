@@ -1,32 +1,29 @@
-use cairo_lang_filesystem::db::FilesGroup;
-use cairo_lang_filesystem::ids::{FileId, FileKind, FileLongId, VirtualFile};
+use cairo_lang_filesystem::ids::{
+    FileId, FileKind, FileLongId, SmolStrId, SpanInFile, VirtualFile,
+};
 use cairo_lang_filesystem::span::{TextOffset, TextSpan, TextWidth};
 use cairo_lang_filesystem::test_utils::FilesDatabaseForTesting;
+use cairo_lang_test_utils::test;
 use cairo_lang_utils::Intern;
 use indoc::indoc;
-use test_log::test;
+use salsa::Database;
 
-use super::{DiagnosticEntry, DiagnosticLocation, DiagnosticsBuilder};
+use super::{DiagnosticEntry, DiagnosticsBuilder};
 
 // Test diagnostic.
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-struct SimpleDiag {
-    file_id: FileId,
+#[derive(Clone, Debug, Eq, Hash, PartialEq, salsa::Update)]
+struct SimpleDiag<'db> {
+    file_id: FileId<'db>,
 }
-impl DiagnosticEntry for SimpleDiag {
-    type DbType = dyn FilesGroup;
-
-    fn format(&self, _db: &dyn cairo_lang_filesystem::db::FilesGroup) -> String {
+impl<'db> DiagnosticEntry<'db> for SimpleDiag<'db> {
+    fn format(&self, _db: &dyn Database) -> String {
         "Simple diagnostic.".into()
     }
 
-    fn location(&self, _db: &dyn cairo_lang_filesystem::db::FilesGroup) -> DiagnosticLocation {
-        DiagnosticLocation {
+    fn location(&self, _db: &'db dyn Database) -> SpanInFile<'db> {
+        SpanInFile {
             file_id: self.file_id,
-            span: TextSpan {
-                start: TextOffset::default().add_width(TextWidth::new_for_testing(0)),
-                end: TextOffset::default().add_width(TextWidth::new_for_testing(6)),
-            },
+            span: TextSpan::new(TextOffset::START, TextWidth::new_for_testing(6).as_offset()),
         }
     }
 
@@ -35,32 +32,37 @@ impl DiagnosticEntry for SimpleDiag {
     }
 }
 
-fn setup() -> (FilesDatabaseForTesting, FileId) {
-    let db_val = FilesDatabaseForTesting::default();
-    let file_id = FileLongId::Virtual(VirtualFile {
+fn setup<'db>(db: &'db FilesDatabaseForTesting) -> FileId<'db> {
+    FileLongId::Virtual(VirtualFile {
         parent: None,
-        name: "dummy_file.sierra".into(),
-        content: "abcd\nefg.\n".into(),
+        name: SmolStrId::from(db, "dummy_file.sierra"),
+        content: SmolStrId::from(db, "abcd\nefg.\n"),
         code_mappings: [].into(),
         kind: FileKind::Module,
+        original_item_removed: false,
     })
-    .intern(&db_val);
-    (db_val, file_id)
+    .intern(db)
 }
 
 #[test]
 fn test_diagnostics() {
-    let (db_val, file_id) = setup();
+    let db_val = FilesDatabaseForTesting::default();
+    let file_id = setup(&db_val);
 
-    let mut diagnostics: DiagnosticsBuilder<SimpleDiag> = DiagnosticsBuilder::default();
+    let mut diagnostics: DiagnosticsBuilder<'_, SimpleDiag<'_>> = DiagnosticsBuilder::default();
     let diagnostic = SimpleDiag { file_id };
     diagnostics.add(diagnostic);
 
-    assert_eq!(diagnostics.build().format(&db_val), indoc! { "
+    assert_eq!(
+        diagnostics.build().format(&db_val),
+        indoc! { "
             error: Simple diagnostic.
-             --> dummy_file.sierra:1:1
-            abcd
-            ^**^
+             --> dummy_file.sierra:1:1-2:1
+              abcd
+             _^
+            | efg.
+            |_^
 
-        " });
+        " }
+    );
 }

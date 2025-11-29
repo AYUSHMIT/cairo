@@ -71,7 +71,7 @@ mod test_contract {
 
 lib.cairo:1:1
 #[starknet::component]
-^********************^
+^^^^^^^^^^^^^^^^^^^^^^
 component:
 
 #[event]
@@ -119,10 +119,10 @@ pub struct ComponentState<TContractState> {
 }
 
 impl ComponentStateDrop<TContractState> of Drop<ComponentState<TContractState>> {}
- 
-impl ComponentStateDeref<TContractState> of core::ops::SnapshotDeref<ComponentState<TContractState>> {
+
+impl ComponentStateDeref<TContractState> of core::ops::Deref<@ComponentState<TContractState>> {
     type Target = starknet::storage::FlattenedStorage<Storage>;
-    fn snapshot_deref(self: @ComponentState<TContractState>) -> starknet::storage::FlattenedStorage<Storage> {
+    fn deref(self: @ComponentState<TContractState>) -> starknet::storage::FlattenedStorage<Storage> {
         starknet::storage::FlattenedStorage {}
     }
 }
@@ -162,15 +162,15 @@ pub trait HasComponent<TContractState> {
 
 lib.cairo:1:1
 #[starknet::component]
-^********************^
+^^^^^^^^^^^^^^^^^^^^^^
 impls:
 
-impl EventDrop of core::traits::Drop::<Event>;
+impl EventDrop<> of core::traits::Drop::<Event>;
 
 
 lib.cairo:1:1
 #[starknet::component]
-^********************^
+^^^^^^^^^^^^^^^^^^^^^^
 starknet_derive:
 
 impl EventIsEvent of starknet::Event<Event> {
@@ -192,25 +192,29 @@ impl EventIsEvent of starknet::Event<Event> {
 
 lib.cairo:3:5
     #[storage]
-    ^********^
+    ^^^^^^^^^^
 impls:
 
-impl StorageStorageBaseDrop of core::traits::Drop::<StorageStorageBase>;
-impl StorageStorageBaseCopy of core::traits::Copy::<StorageStorageBase>;
+#[doc(hidden)]
+impl StorageStorageBaseDrop<> of core::traits::Drop::<StorageStorageBase>;
+#[doc(hidden)]
+impl StorageStorageBaseCopy<> of core::traits::Copy::<StorageStorageBase>;
 
 
 lib.cairo:3:5
     #[storage]
-    ^********^
+    ^^^^^^^^^^
 impls:
 
-impl StorageStorageBaseMutDrop of core::traits::Drop::<StorageStorageBaseMut>;
-impl StorageStorageBaseMutCopy of core::traits::Copy::<StorageStorageBaseMut>;
+#[doc(hidden)]
+impl StorageStorageBaseMutDrop<> of core::traits::Drop::<StorageStorageBaseMut>;
+#[doc(hidden)]
+impl StorageStorageBaseMutCopy<> of core::traits::Copy::<StorageStorageBaseMut>;
 
 
 lib.cairo:9:1
 #[starknet::contract]
-^*******************^
+^^^^^^^^^^^^^^^^^^^^^
 contract:
 
 
@@ -274,10 +278,10 @@ pub struct ContractState {
 }
 
 impl ContractStateDrop of Drop<ContractState> {}
- 
-impl ContractStateDeref of core::ops::SnapshotDeref<ContractState> {
+
+impl ContractStateDeref of core::ops::Deref<@ContractState> {
     type Target = starknet::storage::FlattenedStorage<Storage>;
-    fn snapshot_deref(self: @ContractState) -> starknet::storage::FlattenedStorage<Storage> {
+    fn deref(self: @ContractState) -> starknet::storage::FlattenedStorage<Storage> {
         starknet::storage::FlattenedStorage {}
     }
 }
@@ -306,19 +310,21 @@ pub fn contract_state_for_testing() -> ContractState {
 #[allow(unused_imports)]
 use starknet::storage::Map as LegacyMap;
 #[cfg(target: 'test')]
-pub const TEST_CLASS_HASH: felt252 = 0x13b620794e5b3dc7cc2033d0b9381b35d5d10d1f0a43fe1f5e1d495f793ebab;
+pub const TEST_CLASS_HASH: starknet::ClassHash = 0x13b620794e5b3dc7cc2033d0b9381b35d5d10d1f0a43fe1f5e1d495f793ebab.try_into().unwrap();
 
 #[doc(hidden)]
 #[implicit_precedence(core::pedersen::Pedersen, core::RangeCheck, core::integer::Bitwise, core::ec::EcOp, core::poseidon::Poseidon, core::SegmentArena, core::circuit::RangeCheck96, core::circuit::AddMod, core::circuit::MulMod, core::gas::GasBuiltin, System)]
 fn __wrapper__get_data(mut data: Span::<felt252>) -> Span::<felt252> {
     core::internal::require_implicit::<System>();
     core::internal::revoke_ap_tracking();
-    core::option::OptionTraitImpl::expect(core::gas::withdraw_gas(), 'Out of gas');
+    let Some(_) = core::gas::withdraw_gas() else {
+        core::panic_with_felt252('Out of gas');
+    };
     
     assert(core::array::SpanTrait::is_empty(data), 'Input too long for arguments');
-    core::option::OptionTraitImpl::expect(
-        core::gas::withdraw_gas_all(core::gas::get_builtin_costs()), 'Out of gas',
-    );
+    let Some(_) = core::gas::withdraw_gas_all(core::gas::get_builtin_costs()) else {
+        core::panic_with_felt252('Out of gas');
+    };
     let mut contract_state = unsafe_new_contract_state();
     let res = get_data(@contract_state, );
     let mut arr = ArrayTrait::new();
@@ -329,11 +335,14 @@ fn __wrapper__get_data(mut data: Span::<felt252>) -> Span::<felt252> {
 }
 
 
+#[doc(hidden)]
 pub mod __external {
     pub use super::__wrapper__get_data as get_data;
 }
+#[doc(hidden)]
 pub mod __l1_handler {
 }
+#[doc(hidden)]
 pub mod __constructor {
 }
     impl ContractStateEventEmitter of starknet::event::EventEmitter<
@@ -378,15 +387,15 @@ impl HasComponentImpl_test_component of super::test_component::HasComponent<Cont
 
 lib.cairo:21:14
     #[derive(Drop, starknet::Event)]
-             ^**^
+             ^^^^
 impls:
 
-impl EventDrop of core::traits::Drop::<Event>;
+impl EventDrop<> of core::traits::Drop::<Event>;
 
 
 lib.cairo:21:20
     #[derive(Drop, starknet::Event)]
-                   ^*************^
+                   ^^^^^^^^^^^^^^^
 starknet_derive:
 
 impl EventIsEvent of starknet::Event<Event> {
@@ -425,20 +434,24 @@ impl EventABCIntoEvent of Into<super::test_component::Event, Event> {
 
 lib.cairo:12:5
     #[storage]
-    ^********^
+    ^^^^^^^^^^
 impls:
 
-impl StorageStorageBaseDrop of core::traits::Drop::<StorageStorageBase>;
-impl StorageStorageBaseCopy of core::traits::Copy::<StorageStorageBase>;
+#[doc(hidden)]
+impl StorageStorageBaseDrop<> of core::traits::Drop::<StorageStorageBase>;
+#[doc(hidden)]
+impl StorageStorageBaseCopy<> of core::traits::Copy::<StorageStorageBase>;
 
 
 lib.cairo:12:5
     #[storage]
-    ^********^
+    ^^^^^^^^^^
 impls:
 
-impl StorageStorageBaseMutDrop of core::traits::Drop::<StorageStorageBaseMut>;
-impl StorageStorageBaseMutCopy of core::traits::Copy::<StorageStorageBaseMut>;
+#[doc(hidden)]
+impl StorageStorageBaseMutDrop<> of core::traits::Drop::<StorageStorageBaseMut>;
+#[doc(hidden)]
+impl StorageStorageBaseMutCopy<> of core::traits::Copy::<StorageStorageBaseMut>;
 
 //! > expected_diagnostics
 
@@ -537,7 +550,7 @@ mod test_contract {
 
 lib.cairo:1:1
 #[starknet::component]
-^********************^
+^^^^^^^^^^^^^^^^^^^^^^
 component:
 
 #[event]
@@ -585,10 +598,10 @@ pub struct ComponentState<TContractState> {
 }
 
 impl ComponentStateDrop<TContractState> of Drop<ComponentState<TContractState>> {}
- 
-impl ComponentStateDeref<TContractState> of core::ops::SnapshotDeref<ComponentState<TContractState>> {
+
+impl ComponentStateDeref<TContractState> of core::ops::Deref<@ComponentState<TContractState>> {
     type Target = starknet::storage::FlattenedStorage<Storage>;
-    fn snapshot_deref(self: @ComponentState<TContractState>) -> starknet::storage::FlattenedStorage<Storage> {
+    fn deref(self: @ComponentState<TContractState>) -> starknet::storage::FlattenedStorage<Storage> {
         starknet::storage::FlattenedStorage {}
     }
 }
@@ -628,15 +641,15 @@ pub trait HasComponent<TContractState> {
 
 lib.cairo:1:1
 #[starknet::component]
-^********************^
+^^^^^^^^^^^^^^^^^^^^^^
 impls:
 
-impl EventDrop of core::traits::Drop::<Event>;
+impl EventDrop<> of core::traits::Drop::<Event>;
 
 
 lib.cairo:1:1
 #[starknet::component]
-^********************^
+^^^^^^^^^^^^^^^^^^^^^^
 starknet_derive:
 
 impl EventIsEvent of starknet::Event<Event> {
@@ -658,25 +671,29 @@ impl EventIsEvent of starknet::Event<Event> {
 
 lib.cairo:3:5
     #[storage]
-    ^********^
+    ^^^^^^^^^^
 impls:
 
-impl StorageStorageBaseDrop of core::traits::Drop::<StorageStorageBase>;
-impl StorageStorageBaseCopy of core::traits::Copy::<StorageStorageBase>;
+#[doc(hidden)]
+impl StorageStorageBaseDrop<> of core::traits::Drop::<StorageStorageBase>;
+#[doc(hidden)]
+impl StorageStorageBaseCopy<> of core::traits::Copy::<StorageStorageBase>;
 
 
 lib.cairo:3:5
     #[storage]
-    ^********^
+    ^^^^^^^^^^
 impls:
 
-impl StorageStorageBaseMutDrop of core::traits::Drop::<StorageStorageBaseMut>;
-impl StorageStorageBaseMutCopy of core::traits::Copy::<StorageStorageBaseMut>;
+#[doc(hidden)]
+impl StorageStorageBaseMutDrop<> of core::traits::Drop::<StorageStorageBaseMut>;
+#[doc(hidden)]
+impl StorageStorageBaseMutCopy<> of core::traits::Copy::<StorageStorageBaseMut>;
 
 
 lib.cairo:8:1
 #[starknet::component]
-^********************^
+^^^^^^^^^^^^^^^^^^^^^^
 component:
 
 #[event]
@@ -724,10 +741,10 @@ pub struct ComponentState<TContractState> {
 }
 
 impl ComponentStateDrop<TContractState> of Drop<ComponentState<TContractState>> {}
- 
-impl ComponentStateDeref<TContractState> of core::ops::SnapshotDeref<ComponentState<TContractState>> {
+
+impl ComponentStateDeref<TContractState> of core::ops::Deref<@ComponentState<TContractState>> {
     type Target = starknet::storage::FlattenedStorage<Storage>;
-    fn snapshot_deref(self: @ComponentState<TContractState>) -> starknet::storage::FlattenedStorage<Storage> {
+    fn deref(self: @ComponentState<TContractState>) -> starknet::storage::FlattenedStorage<Storage> {
         starknet::storage::FlattenedStorage {}
     }
 }
@@ -767,15 +784,15 @@ pub trait HasComponent<TContractState> {
 
 lib.cairo:8:1
 #[starknet::component]
-^********************^
+^^^^^^^^^^^^^^^^^^^^^^
 impls:
 
-impl EventDrop of core::traits::Drop::<Event>;
+impl EventDrop<> of core::traits::Drop::<Event>;
 
 
 lib.cairo:8:1
 #[starknet::component]
-^********************^
+^^^^^^^^^^^^^^^^^^^^^^
 starknet_derive:
 
 impl EventIsEvent of starknet::Event<Event> {
@@ -797,25 +814,29 @@ impl EventIsEvent of starknet::Event<Event> {
 
 lib.cairo:10:5
     #[storage]
-    ^********^
+    ^^^^^^^^^^
 impls:
 
-impl StorageStorageBaseDrop of core::traits::Drop::<StorageStorageBase>;
-impl StorageStorageBaseCopy of core::traits::Copy::<StorageStorageBase>;
+#[doc(hidden)]
+impl StorageStorageBaseDrop<> of core::traits::Drop::<StorageStorageBase>;
+#[doc(hidden)]
+impl StorageStorageBaseCopy<> of core::traits::Copy::<StorageStorageBase>;
 
 
 lib.cairo:10:5
     #[storage]
-    ^********^
+    ^^^^^^^^^^
 impls:
 
-impl StorageStorageBaseMutDrop of core::traits::Drop::<StorageStorageBaseMut>;
-impl StorageStorageBaseMutCopy of core::traits::Copy::<StorageStorageBaseMut>;
+#[doc(hidden)]
+impl StorageStorageBaseMutDrop<> of core::traits::Drop::<StorageStorageBaseMut>;
+#[doc(hidden)]
+impl StorageStorageBaseMutCopy<> of core::traits::Copy::<StorageStorageBaseMut>;
 
 
 lib.cairo:16:1
 #[starknet::contract]
-^*******************^
+^^^^^^^^^^^^^^^^^^^^^
 contract:
 
 
@@ -877,10 +898,10 @@ pub struct ContractState {
 }
 
 impl ContractStateDrop of Drop<ContractState> {}
- 
-impl ContractStateDeref of core::ops::SnapshotDeref<ContractState> {
+
+impl ContractStateDeref of core::ops::Deref<@ContractState> {
     type Target = starknet::storage::FlattenedStorage<Storage>;
-    fn snapshot_deref(self: @ContractState) -> starknet::storage::FlattenedStorage<Storage> {
+    fn deref(self: @ContractState) -> starknet::storage::FlattenedStorage<Storage> {
         starknet::storage::FlattenedStorage {}
     }
 }
@@ -910,19 +931,21 @@ pub fn contract_state_for_testing() -> ContractState {
 #[allow(unused_imports)]
 use starknet::storage::Map as LegacyMap;
 #[cfg(target: 'test')]
-pub const TEST_CLASS_HASH: felt252 = 0x20768e618c747c9e742de0446492553ae65eafb837da660ed6516e1ed6b52fc;
+pub const TEST_CLASS_HASH: starknet::ClassHash = 0x20768e618c747c9e742de0446492553ae65eafb837da660ed6516e1ed6b52fc.try_into().unwrap();
 
 #[doc(hidden)]
 #[implicit_precedence(core::pedersen::Pedersen, core::RangeCheck, core::integer::Bitwise, core::ec::EcOp, core::poseidon::Poseidon, core::SegmentArena, core::circuit::RangeCheck96, core::circuit::AddMod, core::circuit::MulMod, core::gas::GasBuiltin, System)]
 fn __wrapper__get_sum(mut data: Span::<felt252>) -> Span::<felt252> {
     core::internal::require_implicit::<System>();
     core::internal::revoke_ap_tracking();
-    core::option::OptionTraitImpl::expect(core::gas::withdraw_gas(), 'Out of gas');
+    let Some(_) = core::gas::withdraw_gas() else {
+        core::panic_with_felt252('Out of gas');
+    };
     
     assert(core::array::SpanTrait::is_empty(data), 'Input too long for arguments');
-    core::option::OptionTraitImpl::expect(
-        core::gas::withdraw_gas_all(core::gas::get_builtin_costs()), 'Out of gas',
-    );
+    let Some(_) = core::gas::withdraw_gas_all(core::gas::get_builtin_costs()) else {
+        core::panic_with_felt252('Out of gas');
+    };
     let mut contract_state = unsafe_new_contract_state();
     let res = get_sum(@contract_state, );
     let mut arr = ArrayTrait::new();
@@ -933,11 +956,14 @@ fn __wrapper__get_sum(mut data: Span::<felt252>) -> Span::<felt252> {
 }
 
 
+#[doc(hidden)]
 pub mod __external {
     pub use super::__wrapper__get_sum as get_sum;
 }
+#[doc(hidden)]
 pub mod __l1_handler {
 }
+#[doc(hidden)]
 pub mod __constructor {
 }
     impl ContractStateEventEmitter of starknet::event::EventEmitter<
@@ -1001,15 +1027,15 @@ impl HasComponentImpl_component2 of super::component2::HasComponent<ContractStat
 
 lib.cairo:30:14
     #[derive(Drop, starknet::Event)]
-             ^**^
+             ^^^^
 impls:
 
-impl EventDrop of core::traits::Drop::<Event>;
+impl EventDrop<> of core::traits::Drop::<Event>;
 
 
 lib.cairo:30:20
     #[derive(Drop, starknet::Event)]
-                   ^*************^
+                   ^^^^^^^^^^^^^^^
 starknet_derive:
 
 impl EventIsEvent of starknet::Event<Event> {
@@ -1065,26 +1091,30 @@ impl EventComp2EventIntoEvent of Into<super::component2::Event, Event> {
 
 lib.cairo:21:5
     #[storage]
-    ^********^
+    ^^^^^^^^^^
 impls:
 
-impl StorageStorageBaseDrop of core::traits::Drop::<StorageStorageBase>;
-impl StorageStorageBaseCopy of core::traits::Copy::<StorageStorageBase>;
+#[doc(hidden)]
+impl StorageStorageBaseDrop<> of core::traits::Drop::<StorageStorageBase>;
+#[doc(hidden)]
+impl StorageStorageBaseCopy<> of core::traits::Copy::<StorageStorageBase>;
 
 
 lib.cairo:21:5
     #[storage]
-    ^********^
+    ^^^^^^^^^^
 impls:
 
-impl StorageStorageBaseMutDrop of core::traits::Drop::<StorageStorageBaseMut>;
-impl StorageStorageBaseMutCopy of core::traits::Copy::<StorageStorageBaseMut>;
+#[doc(hidden)]
+impl StorageStorageBaseMutDrop<> of core::traits::Drop::<StorageStorageBaseMut>;
+#[doc(hidden)]
+impl StorageStorageBaseMutCopy<> of core::traits::Copy::<StorageStorageBaseMut>;
 
 //! > expected_diagnostics
 warning: Plugin diagnostic: The path `component2_storage.data` collides with existing path `component1_storage.data`. Fix or add `#[allow(starknet::colliding_storage_paths)]` if intentional.
  --> lib.cairo:26:9
         component2_storage: super::component2::Storage,
-        ^****************^
+        ^^^^^^^^^^^^^^^^^^
 
 //! > ==========================================================================
 
@@ -1139,7 +1169,7 @@ mod test_contract {
 warning: Plugin diagnostic: The path `component2_storage.data` collides with existing path `component1_storage.data`. Fix or add `#[allow(starknet::colliding_storage_paths)]` if intentional.
  --> lib.cairo:26:9
         component2_storage: super::component2::Storage,
-        ^****************^
+        ^^^^^^^^^^^^^^^^^^
 
 //! > generated_cairo_code
 lib.cairo:
@@ -1187,7 +1217,7 @@ mod test_contract {
 
 lib.cairo:1:1
 #[starknet::component]
-^********************^
+^^^^^^^^^^^^^^^^^^^^^^
 component:
 
 #[event]
@@ -1235,10 +1265,10 @@ pub struct ComponentState<TContractState> {
 }
 
 impl ComponentStateDrop<TContractState> of Drop<ComponentState<TContractState>> {}
- 
-impl ComponentStateDeref<TContractState> of core::ops::SnapshotDeref<ComponentState<TContractState>> {
+
+impl ComponentStateDeref<TContractState> of core::ops::Deref<@ComponentState<TContractState>> {
     type Target = starknet::storage::FlattenedStorage<Storage>;
-    fn snapshot_deref(self: @ComponentState<TContractState>) -> starknet::storage::FlattenedStorage<Storage> {
+    fn deref(self: @ComponentState<TContractState>) -> starknet::storage::FlattenedStorage<Storage> {
         starknet::storage::FlattenedStorage {}
     }
 }
@@ -1278,15 +1308,15 @@ pub trait HasComponent<TContractState> {
 
 lib.cairo:1:1
 #[starknet::component]
-^********************^
+^^^^^^^^^^^^^^^^^^^^^^
 impls:
 
-impl EventDrop of core::traits::Drop::<Event>;
+impl EventDrop<> of core::traits::Drop::<Event>;
 
 
 lib.cairo:1:1
 #[starknet::component]
-^********************^
+^^^^^^^^^^^^^^^^^^^^^^
 starknet_derive:
 
 impl EventIsEvent of starknet::Event<Event> {
@@ -1308,25 +1338,29 @@ impl EventIsEvent of starknet::Event<Event> {
 
 lib.cairo:3:5
     #[storage]
-    ^********^
+    ^^^^^^^^^^
 impls:
 
-impl StorageStorageBaseDrop of core::traits::Drop::<StorageStorageBase>;
-impl StorageStorageBaseCopy of core::traits::Copy::<StorageStorageBase>;
+#[doc(hidden)]
+impl StorageStorageBaseDrop<> of core::traits::Drop::<StorageStorageBase>;
+#[doc(hidden)]
+impl StorageStorageBaseCopy<> of core::traits::Copy::<StorageStorageBase>;
 
 
 lib.cairo:3:5
     #[storage]
-    ^********^
+    ^^^^^^^^^^
 impls:
 
-impl StorageStorageBaseMutDrop of core::traits::Drop::<StorageStorageBaseMut>;
-impl StorageStorageBaseMutCopy of core::traits::Copy::<StorageStorageBaseMut>;
+#[doc(hidden)]
+impl StorageStorageBaseMutDrop<> of core::traits::Drop::<StorageStorageBaseMut>;
+#[doc(hidden)]
+impl StorageStorageBaseMutCopy<> of core::traits::Copy::<StorageStorageBaseMut>;
 
 
 lib.cairo:8:1
 #[starknet::component]
-^********************^
+^^^^^^^^^^^^^^^^^^^^^^
 component:
 
 #[event]
@@ -1374,10 +1408,10 @@ pub struct ComponentState<TContractState> {
 }
 
 impl ComponentStateDrop<TContractState> of Drop<ComponentState<TContractState>> {}
- 
-impl ComponentStateDeref<TContractState> of core::ops::SnapshotDeref<ComponentState<TContractState>> {
+
+impl ComponentStateDeref<TContractState> of core::ops::Deref<@ComponentState<TContractState>> {
     type Target = starknet::storage::FlattenedStorage<Storage>;
-    fn snapshot_deref(self: @ComponentState<TContractState>) -> starknet::storage::FlattenedStorage<Storage> {
+    fn deref(self: @ComponentState<TContractState>) -> starknet::storage::FlattenedStorage<Storage> {
         starknet::storage::FlattenedStorage {}
     }
 }
@@ -1417,15 +1451,15 @@ pub trait HasComponent<TContractState> {
 
 lib.cairo:8:1
 #[starknet::component]
-^********************^
+^^^^^^^^^^^^^^^^^^^^^^
 impls:
 
-impl EventDrop of core::traits::Drop::<Event>;
+impl EventDrop<> of core::traits::Drop::<Event>;
 
 
 lib.cairo:8:1
 #[starknet::component]
-^********************^
+^^^^^^^^^^^^^^^^^^^^^^
 starknet_derive:
 
 impl EventIsEvent of starknet::Event<Event> {
@@ -1447,25 +1481,29 @@ impl EventIsEvent of starknet::Event<Event> {
 
 lib.cairo:10:5
     #[storage]
-    ^********^
+    ^^^^^^^^^^
 impls:
 
-impl StorageStorageBaseDrop of core::traits::Drop::<StorageStorageBase>;
-impl StorageStorageBaseCopy of core::traits::Copy::<StorageStorageBase>;
+#[doc(hidden)]
+impl StorageStorageBaseDrop<> of core::traits::Drop::<StorageStorageBase>;
+#[doc(hidden)]
+impl StorageStorageBaseCopy<> of core::traits::Copy::<StorageStorageBase>;
 
 
 lib.cairo:10:5
     #[storage]
-    ^********^
+    ^^^^^^^^^^
 impls:
 
-impl StorageStorageBaseMutDrop of core::traits::Drop::<StorageStorageBaseMut>;
-impl StorageStorageBaseMutCopy of core::traits::Copy::<StorageStorageBaseMut>;
+#[doc(hidden)]
+impl StorageStorageBaseMutDrop<> of core::traits::Drop::<StorageStorageBaseMut>;
+#[doc(hidden)]
+impl StorageStorageBaseMutCopy<> of core::traits::Copy::<StorageStorageBaseMut>;
 
 
 lib.cairo:16:1
 #[starknet::contract]
-^*******************^
+^^^^^^^^^^^^^^^^^^^^^
 contract:
 
 
@@ -1527,10 +1565,10 @@ pub struct ContractState {
 }
 
 impl ContractStateDrop of Drop<ContractState> {}
- 
-impl ContractStateDeref of core::ops::SnapshotDeref<ContractState> {
+
+impl ContractStateDeref of core::ops::Deref<@ContractState> {
     type Target = starknet::storage::FlattenedStorage<Storage>;
-    fn snapshot_deref(self: @ContractState) -> starknet::storage::FlattenedStorage<Storage> {
+    fn deref(self: @ContractState) -> starknet::storage::FlattenedStorage<Storage> {
         starknet::storage::FlattenedStorage {}
     }
 }
@@ -1560,19 +1598,21 @@ pub fn contract_state_for_testing() -> ContractState {
 #[allow(unused_imports)]
 use starknet::storage::Map as LegacyMap;
 #[cfg(target: 'test')]
-pub const TEST_CLASS_HASH: felt252 = 0x20768e618c747c9e742de0446492553ae65eafb837da660ed6516e1ed6b52fc;
+pub const TEST_CLASS_HASH: starknet::ClassHash = 0x20768e618c747c9e742de0446492553ae65eafb837da660ed6516e1ed6b52fc.try_into().unwrap();
 
 #[doc(hidden)]
 #[implicit_precedence(core::pedersen::Pedersen, core::RangeCheck, core::integer::Bitwise, core::ec::EcOp, core::poseidon::Poseidon, core::SegmentArena, core::circuit::RangeCheck96, core::circuit::AddMod, core::circuit::MulMod, core::gas::GasBuiltin, System)]
 fn __wrapper__get_sum(mut data: Span::<felt252>) -> Span::<felt252> {
     core::internal::require_implicit::<System>();
     core::internal::revoke_ap_tracking();
-    core::option::OptionTraitImpl::expect(core::gas::withdraw_gas(), 'Out of gas');
+    let Some(_) = core::gas::withdraw_gas() else {
+        core::panic_with_felt252('Out of gas');
+    };
     
     assert(core::array::SpanTrait::is_empty(data), 'Input too long for arguments');
-    core::option::OptionTraitImpl::expect(
-        core::gas::withdraw_gas_all(core::gas::get_builtin_costs()), 'Out of gas',
-    );
+    let Some(_) = core::gas::withdraw_gas_all(core::gas::get_builtin_costs()) else {
+        core::panic_with_felt252('Out of gas');
+    };
     let mut contract_state = unsafe_new_contract_state();
     let res = get_sum(@contract_state, );
     let mut arr = ArrayTrait::new();
@@ -1583,11 +1623,14 @@ fn __wrapper__get_sum(mut data: Span::<felt252>) -> Span::<felt252> {
 }
 
 
+#[doc(hidden)]
 pub mod __external {
     pub use super::__wrapper__get_sum as get_sum;
 }
+#[doc(hidden)]
 pub mod __l1_handler {
 }
+#[doc(hidden)]
 pub mod __constructor {
 }
     impl ContractStateEventEmitter of starknet::event::EventEmitter<
@@ -1651,15 +1694,15 @@ impl HasComponentImpl_component2 of super::component2::HasComponent<ContractStat
 
 lib.cairo:30:14
     #[derive(Drop, starknet::Event)]
-             ^**^
+             ^^^^
 impls:
 
-impl EventDrop of core::traits::Drop::<Event>;
+impl EventDrop<> of core::traits::Drop::<Event>;
 
 
 lib.cairo:30:20
     #[derive(Drop, starknet::Event)]
-                   ^*************^
+                   ^^^^^^^^^^^^^^^
 starknet_derive:
 
 impl EventIsEvent of starknet::Event<Event> {
@@ -1715,17 +1758,21 @@ impl EventComp2EventIntoEvent of Into<super::component2::Event, Event> {
 
 lib.cairo:21:5
     #[storage]
-    ^********^
+    ^^^^^^^^^^
 impls:
 
-impl StorageStorageBaseDrop of core::traits::Drop::<StorageStorageBase>;
-impl StorageStorageBaseCopy of core::traits::Copy::<StorageStorageBase>;
+#[doc(hidden)]
+impl StorageStorageBaseDrop<> of core::traits::Drop::<StorageStorageBase>;
+#[doc(hidden)]
+impl StorageStorageBaseCopy<> of core::traits::Copy::<StorageStorageBase>;
 
 
 lib.cairo:21:5
     #[storage]
-    ^********^
+    ^^^^^^^^^^
 impls:
 
-impl StorageStorageBaseMutDrop of core::traits::Drop::<StorageStorageBaseMut>;
-impl StorageStorageBaseMutCopy of core::traits::Copy::<StorageStorageBaseMut>;
+#[doc(hidden)]
+impl StorageStorageBaseMutDrop<> of core::traits::Drop::<StorageStorageBaseMut>;
+#[doc(hidden)]
+impl StorageStorageBaseMutCopy<> of core::traits::Copy::<StorageStorageBaseMut>;

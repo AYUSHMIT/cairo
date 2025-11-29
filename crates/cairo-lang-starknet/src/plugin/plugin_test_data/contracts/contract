@@ -40,7 +40,7 @@ mod test_contract {
     #[derive(Drop, starknet::Event)]
     struct AwesomeEvent {
         x: felt252,
-        data: Array::<felt252>,
+        data: Array<felt252>,
     }
     #[derive(Drop, starknet::Event)]
     struct BestEventEver {}
@@ -93,7 +93,7 @@ mod test_contract {
     #[derive(Drop, starknet::Event)]
     struct AwesomeEvent {
         x: felt252,
-        data: Array::<felt252>,
+        data: Array<felt252>,
     }
     #[derive(Drop, starknet::Event)]
     struct BestEventEver {}
@@ -109,7 +109,7 @@ mod test_contract {
 
 lib.cairo:1:1
 #[starknet::contract]
-^*******************^
+^^^^^^^^^^^^^^^^^^^^^
 contract:
 
 
@@ -147,10 +147,10 @@ pub struct ContractState {
 }
 
 impl ContractStateDrop of Drop<ContractState> {}
- 
-impl ContractStateDeref of core::ops::SnapshotDeref<ContractState> {
+
+impl ContractStateDeref of core::ops::Deref<@ContractState> {
     type Target = starknet::storage::FlattenedStorage<Storage>;
-    fn snapshot_deref(self: @ContractState) -> starknet::storage::FlattenedStorage<Storage> {
+    fn deref(self: @ContractState) -> starknet::storage::FlattenedStorage<Storage> {
         starknet::storage::FlattenedStorage {}
     }
 }
@@ -178,14 +178,16 @@ pub fn contract_state_for_testing() -> ContractState {
 #[allow(unused_imports)]
 use starknet::storage::Map as LegacyMap;
 #[cfg(target: 'test')]
-pub const TEST_CLASS_HASH: felt252 = 0x50afb5642ad6a435e97435ad44ec6060db9755b206a962ddf6d6cbb4a8b99d;
+pub const TEST_CLASS_HASH: starknet::ClassHash = 0x512a6d7124a897370409ddf4a36e94192a8e84b6eb12aa805962db55776618.try_into().unwrap();
 
 #[doc(hidden)]
 #[implicit_precedence(core::pedersen::Pedersen, core::RangeCheck, core::integer::Bitwise, core::ec::EcOp, core::poseidon::Poseidon, core::SegmentArena, core::circuit::RangeCheck96, core::circuit::AddMod, core::circuit::MulMod, core::gas::GasBuiltin, System)]
 fn __wrapper__get_something(mut data: Span::<felt252>) -> Span::<felt252> {
     core::internal::require_implicit::<System>();
     core::internal::revoke_ap_tracking();
-    core::option::OptionTraitImpl::expect(core::gas::withdraw_gas(), 'Out of gas');
+    let Some(_) = core::gas::withdraw_gas() else {
+        core::panic_with_felt252('Out of gas');
+    };
     let mut __arg_arg = core::option::OptionTraitImpl::expect(
         core::serde::Serde::<felt252>::deserialize(ref data),
         'Failed to deserialize param #1'
@@ -195,9 +197,9 @@ fn __wrapper__get_something(mut data: Span::<felt252>) -> Span::<felt252> {
         'Failed to deserialize param #2'
     );
     assert(core::array::SpanTrait::is_empty(data), 'Input too long for arguments');
-    core::option::OptionTraitImpl::expect(
-        core::gas::withdraw_gas_all(core::gas::get_builtin_costs()), 'Out of gas',
-    );
+    let Some(_) = core::gas::withdraw_gas_all(core::gas::get_builtin_costs()) else {
+        core::panic_with_felt252('Out of gas');
+    };
     let mut contract_state = unsafe_new_contract_state();
     let res = get_something(@contract_state, ref __arg_arg, __arg_num);
     let mut arr = ArrayTrait::new();
@@ -213,7 +215,9 @@ fn __wrapper__get_something(mut data: Span::<felt252>) -> Span::<felt252> {
 fn __wrapper__set_something(mut data: Span::<felt252>) -> Span::<felt252> {
     core::internal::require_implicit::<System>();
     core::internal::revoke_ap_tracking();
-    core::option::OptionTraitImpl::expect(core::gas::withdraw_gas(), 'Out of gas');
+    let Some(_) = core::gas::withdraw_gas() else {
+        core::panic_with_felt252('Out of gas');
+    };
     let mut __arg_arg = core::option::OptionTraitImpl::expect(
         core::serde::Serde::<felt252>::deserialize(ref data),
         'Failed to deserialize param #1'
@@ -223,9 +227,9 @@ fn __wrapper__set_something(mut data: Span::<felt252>) -> Span::<felt252> {
         'Failed to deserialize param #2'
     );
     assert(core::array::SpanTrait::is_empty(data), 'Input too long for arguments');
-    core::option::OptionTraitImpl::expect(
-        core::gas::withdraw_gas_all(core::gas::get_builtin_costs()), 'Out of gas',
-    );
+    let Some(_) = core::gas::withdraw_gas_all(core::gas::get_builtin_costs()) else {
+        core::panic_with_felt252('Out of gas');
+    };
     let mut contract_state = unsafe_new_contract_state();
     set_something(ref contract_state, ref __arg_arg, __arg_num);
     let mut arr = ArrayTrait::new();
@@ -240,7 +244,9 @@ fn __wrapper__set_something(mut data: Span::<felt252>) -> Span::<felt252> {
 fn __wrapper__l1_handler_func(mut data: Span::<felt252>) -> Span::<felt252> {
     core::internal::require_implicit::<System>();
     core::internal::revoke_ap_tracking();
-    core::option::OptionTraitImpl::expect(core::gas::withdraw_gas(), 'Out of gas');
+    let Some(_) = core::gas::withdraw_gas() else {
+        core::panic_with_felt252('Out of gas');
+    };
     let __arg_from_address = core::option::OptionTraitImpl::expect(
         core::serde::Serde::<felt252>::deserialize(ref data),
         'Failed to deserialize param #1'
@@ -254,9 +260,9 @@ fn __wrapper__l1_handler_func(mut data: Span::<felt252>) -> Span::<felt252> {
         'Failed to deserialize param #3'
     );
     assert(core::array::SpanTrait::is_empty(data), 'Input too long for arguments');
-    core::option::OptionTraitImpl::expect(
-        core::gas::withdraw_gas_all(core::gas::get_builtin_costs()), 'Out of gas',
-    );
+    let Some(_) = core::gas::withdraw_gas_all(core::gas::get_builtin_costs()) else {
+        core::panic_with_felt252('Out of gas');
+    };
     let mut contract_state = unsafe_new_contract_state();
     l1_handler_func(ref contract_state, __arg_from_address, __arg_arg, __arg_num);
     let mut arr = ArrayTrait::new();
@@ -270,7 +276,9 @@ fn __wrapper__l1_handler_func(mut data: Span::<felt252>) -> Span::<felt252> {
 fn __wrapper__test_serde(mut data: Span::<felt252>) -> Span::<felt252> {
     core::internal::require_implicit::<System>();
     core::internal::revoke_ap_tracking();
-    core::option::OptionTraitImpl::expect(core::gas::withdraw_gas(), 'Out of gas');
+    let Some(_) = core::gas::withdraw_gas() else {
+        core::panic_with_felt252('Out of gas');
+    };
     let __arg_contract_address = core::option::OptionTraitImpl::expect(
         core::serde::Serde::<ContractAddress>::deserialize(ref data),
         'Failed to deserialize param #1'
@@ -284,9 +292,9 @@ fn __wrapper__test_serde(mut data: Span::<felt252>) -> Span::<felt252> {
         'Failed to deserialize param #3'
     );
     assert(core::array::SpanTrait::is_empty(data), 'Input too long for arguments');
-    core::option::OptionTraitImpl::expect(
-        core::gas::withdraw_gas_all(core::gas::get_builtin_costs()), 'Out of gas',
-    );
+    let Some(_) = core::gas::withdraw_gas_all(core::gas::get_builtin_costs()) else {
+        core::panic_with_felt252('Out of gas');
+    };
     let mut contract_state = unsafe_new_contract_state();
     test_serde(ref contract_state, __arg_contract_address, __arg_class_hash, __arg_storage_address);
     let mut arr = ArrayTrait::new();
@@ -296,14 +304,17 @@ fn __wrapper__test_serde(mut data: Span::<felt252>) -> Span::<felt252> {
 }
 
 
+#[doc(hidden)]
 pub mod __external {
     pub use super::__wrapper__get_something as get_something;
     pub use super::__wrapper__set_something as set_something;
     pub use super::__wrapper__test_serde as test_serde;
 }
+#[doc(hidden)]
 pub mod __l1_handler {
     pub use super::__wrapper__l1_handler_func as l1_handler_func;
 }
+#[doc(hidden)]
 pub mod __constructor {
 }
     impl ContractStateEventEmitter of starknet::event::EventEmitter<
@@ -329,15 +340,15 @@ pub mod __constructor {
 
 lib.cairo:29:14
     #[derive(Drop, starknet::Event)]
-             ^**^
+             ^^^^
 impls:
 
-impl EventDrop of core::traits::Drop::<Event>;
+impl EventDrop<> of core::traits::Drop::<Event>;
 
 
 lib.cairo:29:20
     #[derive(Drop, starknet::Event)]
-                   ^*************^
+                   ^^^^^^^^^^^^^^^
 starknet_derive:
 
 impl EventIsEvent of starknet::Event<Event> {
@@ -393,15 +404,15 @@ impl EventBestEventEverIntoEvent of Into<BestEventEver, Event> {
 
 lib.cairo:34:14
     #[derive(Drop, starknet::Event)]
-             ^**^
+             ^^^^
 impls:
 
-impl AwesomeEventDrop of core::traits::Drop::<AwesomeEvent>;
+impl AwesomeEventDrop<> of core::traits::Drop::<AwesomeEvent>;
 
 
 lib.cairo:34:20
     #[derive(Drop, starknet::Event)]
-                   ^*************^
+                   ^^^^^^^^^^^^^^^
 starknet_derive:
 
 impl AwesomeEventIsEvent of starknet::Event<AwesomeEvent> {
@@ -427,15 +438,15 @@ impl AwesomeEventIsEvent of starknet::Event<AwesomeEvent> {
 
 lib.cairo:39:14
     #[derive(Drop, starknet::Event)]
-             ^**^
+             ^^^^
 impls:
 
-impl BestEventEverDrop of core::traits::Drop::<BestEventEver>;
+impl BestEventEverDrop<> of core::traits::Drop::<BestEventEver>;
 
 
 lib.cairo:39:20
     #[derive(Drop, starknet::Event)]
-                   ^*************^
+                   ^^^^^^^^^^^^^^^
 starknet_derive:
 
 impl BestEventEverIsEvent of starknet::Event<BestEventEver> {
@@ -453,19 +464,23 @@ impl BestEventEverIsEvent of starknet::Event<BestEventEver> {
 
 lib.cairo:7:5
     #[storage]
-    ^********^
+    ^^^^^^^^^^
 impls:
 
-impl StorageStorageBaseDrop of core::traits::Drop::<StorageStorageBase>;
-impl StorageStorageBaseCopy of core::traits::Copy::<StorageStorageBase>;
+#[doc(hidden)]
+impl StorageStorageBaseDrop<> of core::traits::Drop::<StorageStorageBase>;
+#[doc(hidden)]
+impl StorageStorageBaseCopy<> of core::traits::Copy::<StorageStorageBase>;
 
 
 lib.cairo:7:5
     #[storage]
-    ^********^
+    ^^^^^^^^^^
 impls:
 
-impl StorageStorageBaseMutDrop of core::traits::Drop::<StorageStorageBaseMut>;
-impl StorageStorageBaseMutCopy of core::traits::Copy::<StorageStorageBaseMut>;
+#[doc(hidden)]
+impl StorageStorageBaseMutDrop<> of core::traits::Drop::<StorageStorageBaseMut>;
+#[doc(hidden)]
+impl StorageStorageBaseMutCopy<> of core::traits::Copy::<StorageStorageBaseMut>;
 
 //! > expected_diagnostics

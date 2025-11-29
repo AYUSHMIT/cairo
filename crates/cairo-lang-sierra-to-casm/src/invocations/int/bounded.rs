@@ -39,7 +39,10 @@ pub fn build(
         BoundedIntConcreteLibfunc::Constrain(libfunc) => {
             build_constrain(builder, &libfunc.boundary)
         }
-        BoundedIntConcreteLibfunc::Trim(libfunc) => build_trim(builder, &libfunc.trimmed_value),
+        BoundedIntConcreteLibfunc::TrimMin(libfunc)
+        | BoundedIntConcreteLibfunc::TrimMax(libfunc) => {
+            build_trim(builder, &libfunc.trimmed_value)
+        }
         BoundedIntConcreteLibfunc::IsZero(_) => build_is_zero(builder),
         BoundedIntConcreteLibfunc::WrapNonZero(_) => build_identity(builder),
     }
@@ -130,7 +133,7 @@ pub fn build_div_rem(
             let q_is_small = q_is_small.unwrap();
             let b_or_q_bound_rc_value = b_or_q_bound_rc_value.unwrap();
             casm_build_extend! {casm_builder,
-                // Note that for a honest prover, `min{q, b} < root`, as otherwise
+                // Note that for an honest prover, `min{q, b} < root`, as otherwise
                 // `lhs_upper > a >= q * b >= root ** 2` (and on the other hand,
                 // by the definition of `root`: `root ** 2 >= lhs_upper`).
                 // Therefore we require `min{q, b} < root`, which guarantees that:

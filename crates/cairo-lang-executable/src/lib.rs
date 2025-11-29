@@ -1,6 +1,7 @@
 pub mod compile;
 pub mod executable;
-pub mod plugin;
+
+mod debug_info;
 
 #[cfg(test)]
 mod test;

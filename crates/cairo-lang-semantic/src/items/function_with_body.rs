@@ -2,267 +2,147 @@ use std::sync::Arc;
 
 use cairo_lang_defs::ids::FunctionWithBodyId;
 use cairo_lang_diagnostics::{DiagnosticAdded, Diagnostics, Maybe, ToMaybe};
+use cairo_lang_filesystem::ids::Tracked;
 use cairo_lang_proc_macros::DebugWithDb;
 use cairo_lang_syntax::attribute::consts::{IMPLICIT_PRECEDENCE_ATTR, INLINE_ATTR};
 use cairo_lang_syntax::attribute::structured::{Attribute, AttributeArg, AttributeArgVariant};
-use cairo_lang_syntax::node::{TypedStablePtr, ast};
+use cairo_lang_syntax::node::{TypedStablePtr, TypedSyntaxNode, ast};
+use cairo_lang_utils::try_extract_matches;
 use cairo_lang_utils::unordered_hash_map::UnorderedHashMap;
-use cairo_lang_utils::{Upcast, try_extract_matches};
-use itertools::Itertools;
+use itertools::{Itertools, chain};
+use salsa::Database;
 
 use super::functions::InlineConfiguration;
-use crate::db::SemanticGroup;
 use crate::diagnostic::{
     NotFoundItemType, SemanticDiagnosticKind, SemanticDiagnostics, SemanticDiagnosticsBuilder,
 };
+use crate::items::free_function::FreeFunctionSemantic;
 use crate::items::functions::ImplicitPrecedence;
+use crate::items::imp::ImplSemantic;
+use crate::items::trt::TraitSemantic;
 use crate::resolve::{ResolvedConcreteItem, Resolver, ResolverData};
 use crate::{Arenas, ExprId, PatternId, SemanticDiagnostic, TypeId, semantic};
 
-// === Declaration ===
-
-// --- Selectors ---
-
-/// Query implementation of [crate::db::SemanticGroup::function_declaration_diagnostics].
-pub fn function_declaration_diagnostics(
-    db: &dyn SemanticGroup,
-    function_id: FunctionWithBodyId,
-) -> Diagnostics<SemanticDiagnostic> {
-    let declaration_data = match function_id {
-        FunctionWithBodyId::Free(free_function_id) => {
-            db.priv_free_function_declaration_data(free_function_id)
-        }
-        FunctionWithBodyId::Impl(impl_function_id) => db
-            .priv_impl_function_declaration_data(impl_function_id)
-            .map(|x| x.function_declaration_data),
-        FunctionWithBodyId::Trait(trait_function_id) => {
-            db.priv_trait_function_declaration_data(trait_function_id)
-        }
-    };
-    declaration_data.map(|data| data.diagnostics).unwrap_or_default()
-}
-
-/// Query implementation of [crate::db::SemanticGroup::function_declaration_inline_config].
-pub fn function_declaration_inline_config(
-    db: &dyn SemanticGroup,
-    function_id: FunctionWithBodyId,
-) -> Maybe<InlineConfiguration> {
-    match function_id {
-        FunctionWithBodyId::Free(free_function_id) => {
-            db.free_function_declaration_inline_config(free_function_id)
-        }
-        FunctionWithBodyId::Impl(impl_function_id) => {
-            db.impl_function_declaration_inline_config(impl_function_id)
-        }
-        FunctionWithBodyId::Trait(trait_function_id) => {
-            db.trait_function_declaration_inline_config(trait_function_id)
-        }
-    }
-}
-
-/// Query implementation of [SemanticGroup::function_declaration_implicit_precedence].
-pub fn function_declaration_implicit_precedence(
-    db: &dyn SemanticGroup,
-    function_id: FunctionWithBodyId,
-) -> Maybe<ImplicitPrecedence> {
-    match function_id {
-        FunctionWithBodyId::Free(free_function_id) => {
-            db.free_function_declaration_implicit_precedence(free_function_id)
-        }
-        FunctionWithBodyId::Impl(impl_function_id) => {
-            db.impl_function_declaration_implicit_precedence(impl_function_id)
-        }
-        FunctionWithBodyId::Trait(trait_function_id) => {
-            db.trait_function_declaration_implicit_precedence(trait_function_id)
-        }
-    }
-}
-
-/// Query implementation of [crate::db::SemanticGroup::function_with_body_signature].
-pub fn function_with_body_signature(
-    db: &dyn SemanticGroup,
-    function_id: FunctionWithBodyId,
-) -> Maybe<semantic::Signature> {
-    match function_id {
-        FunctionWithBodyId::Free(free_function_id) => db.free_function_signature(free_function_id),
-        FunctionWithBodyId::Impl(impl_function_id) => db.impl_function_signature(impl_function_id),
-        FunctionWithBodyId::Trait(trait_function_id) => {
-            db.trait_function_signature(trait_function_id)
-        }
-    }
-}
-
-/// Query implementation of
-/// [crate::db::SemanticGroup::function_with_body_generic_params].
-pub fn function_with_body_generic_params(
-    db: &dyn SemanticGroup,
-    function_id: FunctionWithBodyId,
-) -> Maybe<Vec<semantic::GenericParam>> {
-    match function_id {
-        FunctionWithBodyId::Free(free_function_id) => {
-            db.free_function_generic_params(free_function_id)
-        }
-        FunctionWithBodyId::Impl(impl_function_id) => {
-            let mut res = db.impl_def_generic_params(impl_function_id.impl_def_id(db.upcast()))?;
-            res.extend(db.impl_function_generic_params(impl_function_id)?);
-            Ok(res)
-        }
-        FunctionWithBodyId::Trait(trait_function_id) => {
-            let mut res = db.trait_generic_params(trait_function_id.trait_id(db.upcast()))?;
-            res.extend(db.trait_function_generic_params(trait_function_id)?);
-            Ok(res)
-        }
-    }
-}
-
-/// Query implementation of [crate::db::SemanticGroup::function_with_body_attributes].
-pub fn function_with_body_attributes(
-    db: &dyn SemanticGroup,
-    function_id: FunctionWithBodyId,
-) -> Maybe<Vec<Attribute>> {
-    match function_id {
-        FunctionWithBodyId::Free(free_function_id) => {
-            Ok(db.priv_free_function_declaration_data(free_function_id)?.attributes)
-        }
-        FunctionWithBodyId::Impl(impl_function_id) => Ok(db
-            .priv_impl_function_declaration_data(impl_function_id)?
-            .function_declaration_data
-            .attributes),
-        FunctionWithBodyId::Trait(trait_function_id) => {
-            Ok(db.priv_trait_function_declaration_data(trait_function_id)?.attributes)
-        }
-    }
-}
-
-// === Body ===
-
-#[derive(Clone, Debug, PartialEq, Eq, DebugWithDb)]
-#[debug_db(dyn SemanticGroup + 'static)]
-pub struct FunctionBodyData {
-    pub diagnostics: Diagnostics<SemanticDiagnostic>,
-    pub expr_lookup: UnorderedHashMap<ast::ExprPtr, ExprId>,
-    pub pattern_lookup: UnorderedHashMap<ast::PatternPtr, PatternId>,
-    pub resolver_data: Arc<ResolverData>,
-    pub body: Arc<FunctionBody>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, DebugWithDb)]
-#[debug_db(dyn SemanticGroup + 'static)]
-pub struct FunctionBody {
-    pub arenas: Arenas,
-    pub body_expr: semantic::ExprId,
-}
-
-// --- Selectors ---
-
-/// Query implementation of [crate::db::SemanticGroup::function_body_diagnostics].
-pub fn function_body_diagnostics(
-    db: &dyn SemanticGroup,
-    function_id: FunctionWithBodyId,
-) -> Diagnostics<SemanticDiagnostic> {
-    let body_data = match function_id {
-        FunctionWithBodyId::Free(id) => db.priv_free_function_body_data(id),
-        FunctionWithBodyId::Impl(id) => db.priv_impl_function_body_data(id),
-        FunctionWithBodyId::Trait(id) => {
-            db.priv_trait_function_body_data(id).and_then(|x| x.ok_or(DiagnosticAdded))
-        }
-    };
-    body_data.map(|data| data.diagnostics).unwrap_or_default()
-}
-
-/// Query implementation of [crate::db::SemanticGroup::function_body_expr].
-pub fn function_body_expr(
-    db: &dyn SemanticGroup,
-    function_id: FunctionWithBodyId,
-) -> Maybe<semantic::ExprId> {
-    Ok(db.function_body(function_id)?.body_expr)
-}
-
-/// Query implementation of [crate::db::SemanticGroup::function_body].
-pub fn function_body(
-    db: &dyn SemanticGroup,
-    function_id: FunctionWithBodyId,
-) -> Maybe<Arc<FunctionBody>> {
+/// Query implementation of [FunctionWithBodySemantic::function_with_body_generic_params].
+#[salsa::tracked]
+fn function_with_body_generic_params<'db>(
+    db: &'db dyn Database,
+    _tracked: Tracked,
+    function_id: FunctionWithBodyId<'db>,
+) -> Maybe<Vec<semantic::GenericParam<'db>>> {
     Ok(match function_id {
-        FunctionWithBodyId::Free(id) => db.priv_free_function_body_data(id)?.body,
-        FunctionWithBodyId::Impl(id) => db.priv_impl_function_body_data(id)?.body,
-        FunctionWithBodyId::Trait(id) => {
-            db.priv_trait_function_body_data(id)?.ok_or(DiagnosticAdded)?.body
+        FunctionWithBodyId::Free(free_function_id) => {
+            db.free_function_generic_params(free_function_id)?.to_vec()
         }
+        FunctionWithBodyId::Impl(impl_function_id) => chain!(
+            db.impl_def_generic_params(impl_function_id.impl_def_id(db))?,
+            db.impl_function_generic_params(impl_function_id)?
+        )
+        .cloned()
+        .collect(),
+        FunctionWithBodyId::Trait(trait_function_id) => chain!(
+            db.trait_generic_params(trait_function_id.trait_id(db))?,
+            db.trait_function_generic_params(trait_function_id)?
+        )
+        .cloned()
+        .collect(),
     })
 }
 
-// =========================================================
-
-/// Query implementation of [crate::db::SemanticGroup::expr_semantic].
-pub fn expr_semantic(
-    db: &dyn SemanticGroup,
-    function_id: FunctionWithBodyId,
-    id: semantic::ExprId,
-) -> semantic::Expr {
-    db.function_body(function_id).unwrap().arenas.exprs.get(id).unwrap().clone()
+#[derive(Clone, Debug, PartialEq, Eq, DebugWithDb)]
+#[debug_db(dyn Database)]
+pub struct FunctionBodyData<'db> {
+    pub diagnostics: Diagnostics<'db, SemanticDiagnostic<'db>>,
+    pub expr_lookup: UnorderedHashMap<ast::ExprPtr<'db>, ExprId>,
+    pub pattern_lookup: UnorderedHashMap<ast::PatternPtr<'db>, PatternId>,
+    pub resolver_data: Arc<ResolverData<'db>>,
+    pub body: FunctionBody<'db>,
 }
 
-/// Query implementation of [crate::db::SemanticGroup::pattern_semantic].
-pub fn pattern_semantic(
-    db: &dyn SemanticGroup,
-    function_id: FunctionWithBodyId,
-    id: semantic::PatternId,
-) -> semantic::Pattern {
-    db.function_body(function_id).unwrap().arenas.patterns.get(id).unwrap().clone()
+unsafe impl<'db> salsa::Update for FunctionBodyData<'db> {
+    // Using existing salsa::Update implementations for the fields.
+    // For lookups we assume they are built from the arena,
+    // so a change will be detected and they will be copied.
+    unsafe fn maybe_update(old_pointer: *mut Self, new_value: Self) -> bool {
+        let old_value = unsafe { &mut *old_pointer };
+        let res = unsafe {
+            Diagnostics::maybe_update(&mut old_value.diagnostics, new_value.diagnostics)
+                | Arc::maybe_update(&mut old_value.resolver_data, new_value.resolver_data)
+                | FunctionBody::maybe_update(&mut old_value.body, new_value.body)
+        };
+        if res {
+            old_value.expr_lookup = new_value.expr_lookup;
+            old_value.pattern_lookup = new_value.pattern_lookup;
+            return true;
+        }
+        false
+    }
 }
 
-/// Query implementation of [crate::db::SemanticGroup::statement_semantic].
-pub fn statement_semantic(
-    db: &dyn SemanticGroup,
-    function_id: FunctionWithBodyId,
-    id: semantic::StatementId,
-) -> semantic::Statement {
-    db.function_body(function_id).unwrap().arenas.statements.get(id).unwrap().clone()
+#[derive(Clone, Debug, PartialEq, Eq, DebugWithDb)]
+#[debug_db(dyn Database)]
+pub struct FunctionBody<'db> {
+    pub arenas: Arenas<'db>,
+    pub body_expr: semantic::ExprId,
 }
 
-pub trait SemanticExprLookup<'a>: Upcast<dyn SemanticGroup + 'a> {
+unsafe impl<'db> salsa::Update for FunctionBody<'db> {
+    unsafe fn maybe_update(old_pointer: *mut Self, new_value: Self) -> bool {
+        // The function body contains both the arena and the expr id, so a change will be detected.
+        // The comparison should still be safe to do as we won't follow expired references.
+        let old_value = unsafe { &mut *old_pointer };
+
+        if old_value != &new_value {
+            *old_value = new_value;
+            return true;
+        }
+
+        false
+    }
+}
+
+pub trait SemanticExprLookup<'db>: Database {
     fn lookup_expr_by_ptr(
-        &self,
-        function_id: FunctionWithBodyId,
-        ptr: ast::ExprPtr,
+        &'db self,
+        function_id: FunctionWithBodyId<'db>,
+        ptr: ast::ExprPtr<'db>,
     ) -> Maybe<ExprId> {
         let body_data = match function_id {
-            FunctionWithBodyId::Free(id) => self.upcast().priv_free_function_body_data(id)?,
-            FunctionWithBodyId::Impl(id) => self.upcast().priv_impl_function_body_data(id)?,
+            FunctionWithBodyId::Free(id) => self.priv_free_function_body_data(id)?,
+            FunctionWithBodyId::Impl(id) => self.priv_impl_function_body_data(id)?,
             FunctionWithBodyId::Trait(id) => {
-                self.upcast().priv_trait_function_body_data(id)?.ok_or(DiagnosticAdded)?
+                self.priv_trait_function_body_data(id)?.ok_or(DiagnosticAdded)?
             }
         };
         body_data.expr_lookup.get(&ptr).copied().to_maybe()
     }
     fn lookup_pattern_by_ptr(
-        &self,
-        function_id: FunctionWithBodyId,
-        ptr: ast::PatternPtr,
+        &'db self,
+        function_id: FunctionWithBodyId<'db>,
+        ptr: ast::PatternPtr<'db>,
     ) -> Maybe<PatternId> {
         let body_data = match function_id {
-            FunctionWithBodyId::Free(id) => self.upcast().priv_free_function_body_data(id)?,
-            FunctionWithBodyId::Impl(id) => self.upcast().priv_impl_function_body_data(id)?,
+            FunctionWithBodyId::Free(id) => self.priv_free_function_body_data(id)?,
+            FunctionWithBodyId::Impl(id) => self.priv_impl_function_body_data(id)?,
             FunctionWithBodyId::Trait(id) => {
-                self.upcast().priv_trait_function_body_data(id)?.ok_or(DiagnosticAdded)?
+                self.priv_trait_function_body_data(id)?.ok_or(DiagnosticAdded)?
             }
         };
         body_data.pattern_lookup.get(&ptr).copied().to_maybe()
     }
 }
-impl<'a, T: Upcast<dyn SemanticGroup + 'a> + ?Sized> SemanticExprLookup<'a> for T {}
+impl<'db, T: Database + ?Sized> SemanticExprLookup<'db> for T {}
 
 /// Get the inline configuration of the given function by parsing its attributes.
-pub fn get_inline_config(
-    db: &dyn SemanticGroup,
-    diagnostics: &mut SemanticDiagnostics,
-    attributes: &[Attribute],
-) -> Maybe<InlineConfiguration> {
+pub fn get_inline_config<'db>(
+    db: &'db dyn Database,
+    diagnostics: &mut SemanticDiagnostics<'db>,
+    attributes: &[Attribute<'db>],
+) -> Maybe<InlineConfiguration<'db>> {
     let mut config = InlineConfiguration::None;
     let mut seen_inline_attr = false;
     for attr in attributes {
-        if attr.id != INLINE_ATTR {
+        if attr.id.long(db) != INLINE_ATTR {
             continue;
         }
 
@@ -271,18 +151,18 @@ pub fn get_inline_config(
                 AttributeArg {
                     variant: AttributeArgVariant::Unnamed(ast::Expr::Path(path)), ..
                 },
-            ] if &path.node.get_text(db.upcast()) == "always" => {
-                config = InlineConfiguration::Always(attr.clone());
+            ] if path.as_syntax_node().get_text(db) == "always" => {
+                config = InlineConfiguration::Always(attr.stable_ptr);
             }
             [
                 AttributeArg {
                     variant: AttributeArgVariant::Unnamed(ast::Expr::Path(path)), ..
                 },
-            ] if &path.node.get_text(db.upcast()) == "never" => {
-                config = InlineConfiguration::Never(attr.clone());
+            ] if path.as_syntax_node().get_text(db) == "never" => {
+                config = InlineConfiguration::Never(attr.stable_ptr);
             }
             [] => {
-                config = InlineConfiguration::Should(attr.clone());
+                config = InlineConfiguration::Should(attr.stable_ptr);
             }
             _ => {
                 diagnostics.report(
@@ -311,12 +191,14 @@ pub fn get_inline_config(
 /// Returns the generated implicit precedence and the attribute used to get it, if one exists.
 /// If there is no implicit precedence influencing attribute, then this function returns
 /// [ImplicitPrecedence::UNSPECIFIED].
-pub fn get_implicit_precedence<'a>(
-    diagnostics: &mut SemanticDiagnostics,
-    resolver: &mut Resolver<'_>,
-    attributes: &'a [Attribute],
-) -> (ImplicitPrecedence, Option<&'a Attribute>) {
-    let mut attributes = attributes.iter().rev().filter(|attr| attr.id == IMPLICIT_PRECEDENCE_ATTR);
+pub fn get_implicit_precedence<'a, 'r>(
+    db: &'a dyn Database,
+    diagnostics: &mut SemanticDiagnostics<'a>,
+    resolver: &mut Resolver<'a>,
+    attributes: &'r [Attribute<'a>],
+) -> (ImplicitPrecedence<'a>, Option<&'r Attribute<'a>>) {
+    let mut attributes =
+        attributes.iter().rev().filter(|attr| attr.id.long(db) == IMPLICIT_PRECEDENCE_ATTR);
 
     // Pick the last attribute if any.
     let Some(attr) = attributes.next() else { return (ImplicitPrecedence::UNSPECIFIED, None) };
@@ -324,36 +206,42 @@ pub fn get_implicit_precedence<'a>(
     // Report warnings for overridden attributes if any.
     for attr in attributes {
         diagnostics.report(
-            attr.id_stable_ptr.untyped(),
+            attr.id_stable_ptr,
             SemanticDiagnosticKind::RedundantImplicitPrecedenceAttribute,
         );
     }
 
-    let Ok(types) = attr
-        .args
-        .iter()
-        .map(|arg| match &arg.variant {
-            AttributeArgVariant::Unnamed(value) => {
-                let ast::Expr::Path(path) = value else {
-                    return Err(diagnostics.report(
-                        value,
-                        SemanticDiagnosticKind::UnsupportedImplicitPrecedenceArguments,
-                    ));
-                };
+    let Ok(types) =
+        attr.args
+            .iter()
+            .map(|arg| match &arg.variant {
+                AttributeArgVariant::Unnamed(value) => {
+                    let ast::Expr::Path(path) = value else {
+                        return Err(diagnostics.report(
+                            value.stable_ptr(db),
+                            SemanticDiagnosticKind::UnsupportedImplicitPrecedenceArguments,
+                        ));
+                    };
 
-                resolver.resolve_concrete_path(diagnostics, path, NotFoundItemType::Type).and_then(
-                    |resolved_item: crate::resolve::ResolvedConcreteItem| {
-                        try_extract_matches!(resolved_item, ResolvedConcreteItem::Type).ok_or_else(
-                            || diagnostics.report(value, SemanticDiagnosticKind::UnknownType),
-                        )
-                    },
-                )
-            }
+                    resolver
+                        .resolve_concrete_path(diagnostics, path, NotFoundItemType::Type)
+                        .and_then(|resolved_item: crate::resolve::ResolvedConcreteItem<'_>| {
+                            try_extract_matches!(resolved_item, ResolvedConcreteItem::Type)
+                                .ok_or_else(|| {
+                                    diagnostics.report(
+                                        value.stable_ptr(db),
+                                        SemanticDiagnosticKind::UnknownType,
+                                    )
+                                })
+                        })
+                }
 
-            _ => Err(diagnostics
-                .report(&arg.arg, SemanticDiagnosticKind::UnsupportedImplicitPrecedenceArguments)),
-        })
-        .try_collect::<TypeId, Vec<_>, _>()
+                _ => Err(diagnostics.report(
+                    arg.arg.stable_ptr(db),
+                    SemanticDiagnosticKind::UnsupportedImplicitPrecedenceArguments,
+                )),
+            })
+            .try_collect::<TypeId<'_>, Vec<_>, _>()
     else {
         return (ImplicitPrecedence::UNSPECIFIED, None);
     };
@@ -362,3 +250,125 @@ pub fn get_implicit_precedence<'a>(
 
     (precedence, Some(attr))
 }
+
+/// Trait for function-with-body-related semantic queries.
+pub trait FunctionWithBodySemantic<'db>: Database {
+    /// Returns the semantic diagnostics of a declaration (signature) of a function with a body.
+    fn function_declaration_diagnostics(
+        &'db self,
+        function_id: FunctionWithBodyId<'db>,
+    ) -> Diagnostics<'db, SemanticDiagnostic<'db>> {
+        match function_id {
+            FunctionWithBodyId::Free(id) => self.free_function_declaration_diagnostics(id),
+            FunctionWithBodyId::Impl(id) => self.impl_function_declaration_diagnostics(id),
+            FunctionWithBodyId::Trait(id) => self.trait_function_declaration_diagnostics(id),
+        }
+    }
+    /// Returns the inline configuration of a declaration (signature) of a function with a body.
+    fn function_declaration_inline_config(
+        &'db self,
+        function_id: FunctionWithBodyId<'db>,
+    ) -> Maybe<InlineConfiguration<'db>> {
+        match function_id {
+            FunctionWithBodyId::Free(id) => self.free_function_declaration_inline_config(id),
+            FunctionWithBodyId::Impl(id) => self.impl_function_declaration_inline_config(id),
+            FunctionWithBodyId::Trait(id) => self.trait_function_declaration_inline_config(id),
+        }
+    }
+    /// Returns the implicit order of a declaration (signature) of a function with a body.
+    fn function_declaration_implicit_precedence(
+        &'db self,
+        function_id: FunctionWithBodyId<'db>,
+    ) -> Maybe<&'db ImplicitPrecedence<'db>> {
+        match function_id {
+            FunctionWithBodyId::Free(id) => self.free_function_declaration_implicit_precedence(id),
+            FunctionWithBodyId::Impl(id) => self.impl_function_declaration_implicit_precedence(id),
+            FunctionWithBodyId::Trait(id) => {
+                self.trait_function_declaration_implicit_precedence(id)
+            }
+        }
+    }
+    /// Returns the signature of a function with a body.
+    fn function_with_body_signature(
+        &'db self,
+        function_id: FunctionWithBodyId<'db>,
+    ) -> Maybe<&'db semantic::Signature<'db>> {
+        match function_id {
+            FunctionWithBodyId::Free(id) => self.free_function_signature(id),
+            FunctionWithBodyId::Impl(id) => self.impl_function_signature(id),
+            FunctionWithBodyId::Trait(id) => self.trait_function_signature(id),
+        }
+    }
+    /// Returns all the available generic params inside a function body.
+    fn function_with_body_generic_params(
+        &'db self,
+        function_id: FunctionWithBodyId<'db>,
+    ) -> Maybe<Vec<semantic::GenericParam<'db>>> {
+        function_with_body_generic_params(self.as_dyn_database(), (), function_id)
+    }
+    /// Returns the attributes of a function with a body.
+    fn function_with_body_attributes(
+        &'db self,
+        function_id: FunctionWithBodyId<'db>,
+    ) -> Maybe<&'db [Attribute<'db>]> {
+        match function_id {
+            FunctionWithBodyId::Free(id) => self.free_function_attributes(id),
+            FunctionWithBodyId::Impl(id) => self.impl_function_attributes(id),
+            FunctionWithBodyId::Trait(id) => self.trait_function_attributes(id),
+        }
+    }
+    /// Returns the semantic diagnostics of a body of a function (with a body).
+    fn function_body_diagnostics(
+        &'db self,
+        function_id: FunctionWithBodyId<'db>,
+    ) -> Diagnostics<'db, SemanticDiagnostic<'db>> {
+        match function_id {
+            FunctionWithBodyId::Free(id) => self.free_function_body_diagnostics(id),
+            FunctionWithBodyId::Impl(id) => self.impl_function_body_diagnostics(id),
+            FunctionWithBodyId::Trait(id) => self.trait_function_body_diagnostics(id),
+        }
+    }
+    /// Returns the body of a function (with a body).
+    fn function_body(
+        &'db self,
+        function_id: FunctionWithBodyId<'db>,
+    ) -> Maybe<&'db FunctionBody<'db>> {
+        match function_id {
+            FunctionWithBodyId::Free(id) => self.free_function_body(id),
+            FunctionWithBodyId::Impl(id) => self.impl_function_body(id),
+            FunctionWithBodyId::Trait(id) => self.trait_function_body(id)?.ok_or(DiagnosticAdded),
+        }
+    }
+    /// Returns the body expr of a function (with a body).
+    fn function_body_expr(
+        &'db self,
+        function_id: FunctionWithBodyId<'db>,
+    ) -> Maybe<semantic::ExprId> {
+        Ok(self.function_body(function_id)?.body_expr)
+    }
+    /// Assumes function and expression are present.
+    fn expr_semantic(
+        &'db self,
+        function_id: FunctionWithBodyId<'db>,
+        id: semantic::ExprId,
+    ) -> semantic::Expr<'db> {
+        self.function_body(function_id).unwrap().arenas.exprs.get(id).unwrap().clone()
+    }
+    /// Assumes function and statement are valid.
+    fn statement_semantic(
+        &'db self,
+        function_id: FunctionWithBodyId<'db>,
+        id: semantic::StatementId,
+    ) -> semantic::Statement<'db> {
+        self.function_body(function_id).unwrap().arenas.statements.get(id).unwrap().clone()
+    }
+    /// Assumes function and pattern are present.
+    fn pattern_semantic(
+        &'db self,
+        function_id: FunctionWithBodyId<'db>,
+        id: semantic::PatternId,
+    ) -> semantic::Pattern<'db> {
+        self.function_body(function_id).unwrap().arenas.patterns.get(id).unwrap().clone()
+    }
+}
+impl<'db, T: Database + ?Sized> FunctionWithBodySemantic<'db> for T {}

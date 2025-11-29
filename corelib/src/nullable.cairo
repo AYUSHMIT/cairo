@@ -32,12 +32,13 @@
 //! ```
 
 use crate::box::BoxTrait;
-use crate::traits::Default;
-use crate::traits::Felt252DictValue;
+use crate::traits::{Default, Felt252DictValue};
 
 /// A type that can either be null or contain a boxed value.
-#[derive(Copy, Drop)]
 pub extern type Nullable<T>;
+
+impl NullableCopy<T, +Copy<T>> of Copy<Nullable<T>>;
+impl NullableDrop<T, +Drop<T>> of Drop<Nullable<T>>;
 
 /// Represents the result of matching a `Nullable` value.
 ///
@@ -119,6 +120,28 @@ pub impl NullableImpl<T> of NullableTrait<T> {
     fn deref_or<+Drop<T>>(self: Nullable<T>, default: T) -> T {
         match match_nullable(self) {
             FromNullableResult::Null => default,
+            FromNullableResult::NotNull(value) => value.unbox(),
+        }
+    }
+
+    ///  Returns the contained value if not null, or computes it from a closure.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let value: Nullable<u32> = NullableTrait::new(42);
+    /// assert!(value.deref_or_else(|| 0) == 42);
+    ///
+    /// let null_value: Nullable<u32> = Default::default();
+    /// assert!(null_value.deref_or_else(|| 0) == 0);
+    /// ```
+    fn deref_or_else<
+        F, +Drop<F>, impl func: core::ops::FnOnce<F, ()>[Output: T], +Drop<func::Output>,
+    >(
+        self: Nullable<T>, f: F,
+    ) -> T {
+        match match_nullable(self) {
+            FromNullableResult::Null => f(),
             FromNullableResult::NotNull(value) => value.unbox(),
         }
     }

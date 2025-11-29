@@ -32,20 +32,15 @@ mod Balance {
 #[cfg(test)]
 mod tests {
     use starknet::syscalls::deploy_syscall;
-
     use super::{Balance, IBalanceDispatcher, IBalanceDispatcherTrait};
 
     #[test]
     fn test_flow() {
-        let (address0, _) = deploy_syscall(
-            Balance::TEST_CLASS_HASH.try_into().unwrap(), 0, [100].span(), false,
-        )
+        let (address0, _) = deploy_syscall(Balance::TEST_CLASS_HASH, 0, [100].span(), false)
             .unwrap();
         let mut contract0 = IBalanceDispatcher { contract_address: address0 };
 
-        let (address1, _) = deploy_syscall(
-            Balance::TEST_CLASS_HASH.try_into().unwrap(), 0, [200].span(), false,
-        )
+        let (address1, _) = deploy_syscall(Balance::TEST_CLASS_HASH, 0, [200].span(), false)
             .unwrap();
         let mut contract1 = IBalanceDispatcher { contract_address: address1 };
 

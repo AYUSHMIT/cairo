@@ -5,14 +5,20 @@ use itertools::chain;
 use serde::{Deserialize, Serialize};
 
 use crate::compile::CompiledFunction;
+use crate::debug_info::{Annotations, DebugInfo, ProgramInformation};
 
-/// Structure to hold the executable represenstation of a program.
+pub const NOT_RETURNING_HEADER_SIZE: usize = 6;
+
+/// Structure to hold the executable representation of a program.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Executable {
     /// The bytecode of the program.
     pub program: AssembledCairoProgram,
     /// The available entrypoints for the program.
     pub entrypoints: Vec<ExecutableEntryPoint>,
+    /// Debug information for the assembled program.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub debug_info: Option<DebugInfo>,
 }
 
 impl Executable {
@@ -23,6 +29,7 @@ impl Executable {
             call rel 4;
             jmp rel 0;
         };
+        assert_eq!(non_returning_header.current_code_offset, NOT_RETURNING_HEADER_SIZE);
         Self {
             program: compiled.program.assemble_ex(
                 chain!(&non_returning_header.instructions, &compiled.wrapper.header),
@@ -36,15 +43,26 @@ impl Executable {
                 },
                 ExecutableEntryPoint {
                     builtins: compiled.wrapper.builtins,
-                    offset: non_returning_header.current_code_offset,
+                    offset: NOT_RETURNING_HEADER_SIZE,
                     kind: EntryPointKind::Bootloader,
                 },
             ],
+            debug_info: Some(DebugInfo {
+                annotations: Annotations::from(ProgramInformation {
+                    program_offset: NOT_RETURNING_HEADER_SIZE
+                        + compiled
+                            .wrapper
+                            .header
+                            .iter()
+                            .map(|inst| inst.body.op_size())
+                            .sum::<usize>(),
+                }),
+            }),
         }
     }
 }
 
-/// Information about a executable entrypoint.
+/// Information about an executable entrypoint.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExecutableEntryPoint {
     /// The used builtins of the function.
@@ -56,7 +74,7 @@ pub struct ExecutableEntryPoint {
 }
 
 /// The kind of an entrypoint.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, PartialEq, Deserialize)]
 pub enum EntryPointKind {
     /// Entrypoint is for running it using a bootloader.
     ///
@@ -64,7 +82,7 @@ pub enum EntryPointKind {
     Bootloader,
     /// Entrypoint is for running this executable as a standalone program.
     ///
-    /// The entrypoint starts with `ap += <builtins.len()>` and expected the builtins to be injected
+    /// The entrypoint starts with `ap += <builtins.len()>` and expects the builtins to be injected
     /// there, and ends with an infinite loop.
     Standalone,
 }

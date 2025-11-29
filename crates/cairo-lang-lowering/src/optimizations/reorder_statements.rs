@@ -4,16 +4,17 @@ mod test;
 
 use std::cmp::Reverse;
 
+use cairo_lang_defs::ids::ExternFunctionId;
 use cairo_lang_utils::ordered_hash_map::OrderedHashMap;
 use cairo_lang_utils::unordered_hash_map::{Entry, UnorderedHashMap};
 use cairo_lang_utils::unordered_hash_set::UnorderedHashSet;
 use itertools::{Itertools, zip_eq};
+use salsa::Database;
 
 use crate::borrow_check::analysis::{Analyzer, BackAnalysis, StatementLocation};
 use crate::db::LoweringGroup;
-use crate::ids::FunctionId;
 use crate::{
-    BlockId, FlatLowered, MatchInfo, Statement, StatementCall, VarRemapping, VarUsage, VariableId,
+    BlockId, Lowered, MatchInfo, Statement, StatementCall, VarRemapping, VarUsage, VariableId,
 };
 
 /// Reorder the statements in the lowering in order to move variable definitions closer to their
@@ -22,13 +23,14 @@ use crate::{
 /// The list of call statements that can be moved is currently hardcoded.
 ///
 /// Removing unnecessary remapping before this optimization will result in better code.
-pub fn reorder_statements(db: &dyn LoweringGroup, lowered: &mut FlatLowered) {
+pub fn reorder_statements(db: &dyn Database, lowered: &mut Lowered<'_>) {
     if lowered.blocks.is_empty() {
         return;
     }
     let ctx = ReorderStatementsContext {
+        db,
         lowered: &*lowered,
-        moveable_functions: &db.priv_movable_function_ids(),
+        moveable_functions: db.priv_movable_function_ids(),
         statement_to_move: vec![],
     };
     let mut analysis = BackAnalysis::new(lowered, ctx);
@@ -36,9 +38,9 @@ pub fn reorder_statements(db: &dyn LoweringGroup, lowered: &mut FlatLowered) {
     let ctx = analysis.analyzer;
 
     let mut changes_by_block =
-        OrderedHashMap::<BlockId, Vec<(usize, Option<Statement>)>>::default();
+        OrderedHashMap::<BlockId, Vec<(usize, Option<Statement<'_>>)>>::default();
 
-    for (src, opt_dst) in ctx.statement_to_move.into_iter() {
+    for (src, opt_dst) in ctx.statement_to_move {
         changes_by_block.entry(src.0).or_insert_with(Vec::new).push((src.1, None));
 
         if let Some(dst) = opt_dst {
@@ -47,7 +49,7 @@ pub fn reorder_statements(db: &dyn LoweringGroup, lowered: &mut FlatLowered) {
         }
     }
 
-    for (block_id, block_changes) in changes_by_block.into_iter() {
+    for (block_id, block_changes) in changes_by_block {
         let statements = &mut lowered.blocks[block_id].statements;
 
         // Apply block changes in reverse order to prevent a change from invalidating the
@@ -73,25 +75,30 @@ pub struct ReorderStatementsInfo {
     next_use: UnorderedHashMap<VariableId, StatementLocation>,
 }
 
-pub struct ReorderStatementsContext<'a> {
-    lowered: &'a FlatLowered,
+pub struct ReorderStatementsContext<'db> {
+    db: &'db dyn Database,
+    lowered: &'db Lowered<'db>,
     // A list of function that can be moved.
-    moveable_functions: &'a UnorderedHashSet<FunctionId>,
+    moveable_functions: &'db UnorderedHashSet<ExternFunctionId<'db>>,
     statement_to_move: Vec<(StatementLocation, Option<StatementLocation>)>,
 }
-impl ReorderStatementsContext<'_> {
-    fn call_can_be_moved(&mut self, stmt: &StatementCall) -> bool {
-        self.moveable_functions.contains(&stmt.function)
+impl<'db> ReorderStatementsContext<'db> {
+    fn call_can_be_moved(&mut self, stmt: &StatementCall<'db>) -> bool {
+        if let Some((extern_id, _)) = stmt.function.get_extern(self.db) {
+            self.moveable_functions.contains(&extern_id)
+        } else {
+            false
+        }
     }
 }
-impl Analyzer<'_> for ReorderStatementsContext<'_> {
+impl<'db> Analyzer<'db, '_> for ReorderStatementsContext<'db> {
     type Info = ReorderStatementsInfo;
 
     fn visit_stmt(
         &mut self,
         info: &mut Self::Info,
         statement_location: StatementLocation,
-        stmt: &Statement,
+        stmt: &Statement<'db>,
     ) {
         let mut immovable = matches!(stmt, Statement::Call(stmt) if !self.call_can_be_moved(stmt));
         let mut optional_target_location = None;
@@ -126,7 +133,11 @@ impl Analyzer<'_> for ReorderStatementsContext<'_> {
             }
 
             self.statement_to_move.push((statement_location, Some(target_location)))
-        } else if stmt.inputs().iter().all(|v| self.lowered.variables[v.var_id].droppable.is_ok()) {
+        } else if stmt
+            .inputs()
+            .iter()
+            .all(|v| self.lowered.variables[v.var_id].info.droppable.is_ok())
+        {
             // If a movable statement is unused, and all its inputs are droppable removing it is
             // valid.
             self.statement_to_move.push((statement_location, None))
@@ -143,7 +154,7 @@ impl Analyzer<'_> for ReorderStatementsContext<'_> {
         info: &mut Self::Info,
         statement_location: StatementLocation,
         _target_block_id: BlockId,
-        remapping: &VarRemapping,
+        remapping: &VarRemapping<'db>,
     ) {
         for VarUsage { var_id, .. } in remapping.values() {
             info.next_use.insert(*var_id, statement_location);
@@ -153,7 +164,7 @@ impl Analyzer<'_> for ReorderStatementsContext<'_> {
     fn merge_match(
         &mut self,
         statement_location: StatementLocation,
-        match_info: &MatchInfo,
+        match_info: &MatchInfo<'db>,
         infos: impl Iterator<Item = Self::Info>,
     ) -> Self::Info {
         let mut infos = zip_eq(infos, match_info.arms()).map(|(mut info, arm)| {
@@ -179,7 +190,7 @@ impl Analyzer<'_> for ReorderStatementsContext<'_> {
     fn info_from_return(
         &mut self,
         statement_location: StatementLocation,
-        vars: &[VarUsage],
+        vars: &[VarUsage<'db>],
     ) -> Self::Info {
         let mut info = Self::Info::default();
         for var_usage in vars {

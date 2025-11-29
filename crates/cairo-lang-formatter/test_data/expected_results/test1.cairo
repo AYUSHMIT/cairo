@@ -36,6 +36,9 @@ fn bar<T>(x: T) -> T {
     let [a, b, c] = f(
         "very long string that should not cause a break in the fixed size array pattern",
     );
+    // Long fixed-size array
+    let arr = [composition_log_size - LOG_COMPOSITION_SPLIT_FACTOR;
+        COMPOSITION_SPLIT_FACTOR * QM31_EXTENSION_DEGREE];
 }
 
 
@@ -43,7 +46,7 @@ struct A {}
 struct B {}
 
 // Calculates fib, but all variables are boxes.
-fn fib(a: Box::<felt252>, b: Box::<felt252>, n: Box::<felt252>) -> Box::<felt252> {
+fn fib(a: Box<felt252>, b: Box<felt252>, n: Box<felt252>) -> Box<felt252> {
     match n {
         0 => { a },
         _ => {

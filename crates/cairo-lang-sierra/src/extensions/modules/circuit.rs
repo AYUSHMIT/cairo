@@ -4,6 +4,7 @@ use std::sync::LazyLock;
 use cairo_lang_utils::unordered_hash_map::UnorderedHashMap;
 use cairo_lang_utils::unordered_hash_set::UnorderedHashSet;
 use cairo_lang_utils::{extract_matches, require};
+use itertools::Itertools;
 use num_bigint::BigInt;
 use num_traits::{One, Signed, ToPrimitive, Zero};
 
@@ -28,7 +29,7 @@ use crate::program::{ConcreteTypeLongId, GenericArg};
 use crate::{define_libfunc_hierarchy, define_type_hierarchy};
 
 /// The set of types that are considered circuit components.
-/// A circuit it defined as Circuit<(Output0, Output1, ...)> where all the outputs are
+/// A circuit is defined as Circuit<(Output0, Output1, ...)> where all the outputs are
 /// circuit components (recursively).
 static CIRCUIT_COMPONENTS: LazyLock<UnorderedHashSet<GenericTypeId>> = LazyLock::new(|| {
     UnorderedHashSet::from_iter([
@@ -387,7 +388,7 @@ impl ConcreteType for ConcreteU96LimbsLessThanGuarantee {
 }
 
 /// A value that is guaranteed to fit in a u96.
-/// This value can only be dropped by being written to a 96bit range check.
+/// This value can only be dropped by being written to a 96-bit range check.
 #[derive(Default)]
 pub struct U96Guarantee {}
 impl NoGenericArgsGenericType for U96Guarantee {
@@ -411,7 +412,7 @@ impl NamedType for CircuitDescriptor {
         args: &[GenericArg],
     ) -> Result<Self::Concrete, SpecializationError> {
         let circ_ty = args_as_single_type(args)?;
-        validate_is_circuit(context, circ_ty.clone())?;
+        validate_is_circuit(context, circ_ty)?;
         Ok(Self::Concrete {
             info: TypeInfo {
                 long_id: ConcreteTypeLongId { generic_id: Self::ID, generic_args: args.to_vec() },
@@ -480,7 +481,7 @@ fn validate_is_circuit(
     context: &dyn TypeSpecializationContext,
     circ_ty: ConcreteTypeId,
 ) -> Result<(), SpecializationError> {
-    if context.get_type_info(circ_ty.clone())?.long_id.generic_id != Circuit::ID {
+    if context.get_type_info(circ_ty)?.long_id.generic_id != Circuit::ID {
         return Err(SpecializationError::UnsupportedGenericArg);
     }
     Ok(())
@@ -519,13 +520,13 @@ impl SignatureAndTypeGenericLibfunc for InitCircuitDataLibFuncWrapped {
             vec![ParamSignature::new(range_check96_type.clone()).with_allow_add_const()],
             vec![
                 OutputVarInfo {
-                    ty: range_check96_type.clone(),
+                    ty: range_check96_type,
                     ref_info: OutputVarReferenceInfo::Deferred(DeferredOutputKind::AddConst {
                         param_idx: 0,
                     }),
                 },
                 OutputVarInfo {
-                    ty: circuit_input_accumulator_ty.clone(),
+                    ty: circuit_input_accumulator_ty,
                     ref_info: OutputVarReferenceInfo::Deferred(DeferredOutputKind::Generic),
                 },
             ],
@@ -555,13 +556,16 @@ impl SignatureAndTypeGenericLibfunc for AddCircuitInputLibFuncWrapped {
 
         let u96_guarantee_ty = context.get_concrete_type(U96Guarantee::id(), &[])?;
 
-        let val_ty = context.get_concrete_type(StructType::id(), &[
-            GenericArg::UserType(UserTypeId::from_string("Tuple")),
-            GenericArg::Type(u96_guarantee_ty.clone()),
-            GenericArg::Type(u96_guarantee_ty.clone()),
-            GenericArg::Type(u96_guarantee_ty.clone()),
-            GenericArg::Type(u96_guarantee_ty),
-        ])?;
+        let val_ty = context.get_concrete_type(
+            StructType::id(),
+            &[
+                GenericArg::UserType(UserTypeId::from_string("Tuple")),
+                GenericArg::Type(u96_guarantee_ty.clone()),
+                GenericArg::Type(u96_guarantee_ty.clone()),
+                GenericArg::Type(u96_guarantee_ty.clone()),
+                GenericArg::Type(u96_guarantee_ty),
+            ],
+        )?;
         Ok(LibfuncSignature {
             param_signatures: vec![
                 ParamSignature::new(circuit_input_accumulator_ty.clone()),
@@ -592,7 +596,7 @@ impl SignatureAndTypeGenericLibfunc for AddCircuitInputLibFuncWrapped {
 
 pub type AddCircuitInputLibFunc = WrapSignatureAndTypeGenericLibfunc<AddCircuitInputLibFuncWrapped>;
 
-/// A zero-input function that returns an handle to the offsets of a circuit.
+/// A zero-input function that returns a handle to the offsets of a circuit.
 #[derive(Default)]
 pub struct GetCircuitDescriptorLibFuncWrapped {}
 impl SignatureAndTypeGenericLibfunc for GetCircuitDescriptorLibFuncWrapped {
@@ -604,7 +608,7 @@ impl SignatureAndTypeGenericLibfunc for GetCircuitDescriptorLibFuncWrapped {
         ty: ConcreteTypeId,
     ) -> Result<LibfuncSignature, SpecializationError> {
         let circuit_descriptor_ty =
-            context.get_concrete_type(CircuitDescriptor::id(), &[GenericArg::Type(ty.clone())])?;
+            context.get_concrete_type(CircuitDescriptor::id(), &[GenericArg::Type(ty)])?;
 
         Ok(LibfuncSignature::new_non_branch(
             vec![],
@@ -629,19 +633,22 @@ fn get_u384_type(
     context: &dyn SignatureSpecializationContext,
 ) -> Result<ConcreteTypeId, SpecializationError> {
     let u96_ty = get_u96_type(context)?;
-    context.get_concrete_type(StructType::id(), &[
-        GenericArg::UserType(UserTypeId::from_string("core::circuit::u384")),
-        GenericArg::Type(u96_ty.clone()),
-        GenericArg::Type(u96_ty.clone()),
-        GenericArg::Type(u96_ty.clone()),
-        GenericArg::Type(u96_ty),
-    ])
+    context.get_concrete_type(
+        StructType::id(),
+        &[
+            GenericArg::UserType(UserTypeId::from_string("core::circuit::u384")),
+            GenericArg::Type(u96_ty.clone()),
+            GenericArg::Type(u96_ty.clone()),
+            GenericArg::Type(u96_ty.clone()),
+            GenericArg::Type(u96_ty),
+        ],
+    )
 }
 
 pub type GetCircuitDescriptorLibFunc =
     WrapSignatureAndTypeGenericLibfunc<GetCircuitDescriptorLibFuncWrapped>;
 
-/// A zero-input function that returns an handle to the offsets of a circuit.
+/// A zero-input function that returns a handle to the offsets of a circuit.
 #[derive(Default)]
 pub struct EvalCircuitLibFuncWrapped {}
 impl SignatureAndTypeGenericLibfunc for EvalCircuitLibFuncWrapped {
@@ -674,7 +681,7 @@ impl SignatureAndTypeGenericLibfunc for EvalCircuitLibFuncWrapped {
                 one,
             ]
             .into_iter()
-            .map(|ty| ParamSignature::new(ty.clone()))
+            .map(ParamSignature::new)
             .collect(),
             branch_signatures: vec![
                 // Success.
@@ -686,9 +693,10 @@ impl SignatureAndTypeGenericLibfunc for EvalCircuitLibFuncWrapped {
                             ref_info: OutputVarReferenceInfo::Deferred(DeferredOutputKind::Generic),
                         },
                         OutputVarInfo {
-                            ty: context.get_concrete_type(CircuitOutputs::id(), &[
-                                GenericArg::Type(ty.clone()),
-                            ])?,
+                            ty: context.get_concrete_type(
+                                CircuitOutputs::id(),
+                                &[GenericArg::Type(ty.clone())],
+                            )?,
                             ref_info: OutputVarReferenceInfo::SimpleDerefs,
                         },
                     ],
@@ -704,9 +712,10 @@ impl SignatureAndTypeGenericLibfunc for EvalCircuitLibFuncWrapped {
                             ref_info: OutputVarReferenceInfo::Deferred(DeferredOutputKind::Generic),
                         },
                         OutputVarInfo {
-                            ty: context.get_concrete_type(CircuitPartialOutputs::id(), &[
-                                GenericArg::Type(ty),
-                            ])?,
+                            ty: context.get_concrete_type(
+                                CircuitPartialOutputs::id(),
+                                &[GenericArg::Type(ty)],
+                            )?,
                             ref_info: OutputVarReferenceInfo::SimpleDerefs,
                         },
                         OutputVarInfo {
@@ -814,7 +823,7 @@ impl NamedLibfunc for GetOutputLibFunc {
 
         // TODO(ilya): Fail if `circuit_ty` does not contain output_ty.
         Ok(ConcreteGetOutputLibFunc {
-            signature: self.specialize_signature(context.upcast(), args)?,
+            signature: self.specialize_signature(context, args)?,
             circuit_ty,
             output_ty,
         })
@@ -917,10 +926,7 @@ impl NamedLibfunc for U96LimbsLessThanGuaranteeVerifyLibfunc {
         let limb_count = args_as_single_value(args)?
             .to_usize()
             .ok_or(SpecializationError::UnsupportedGenericArg)?;
-        Ok(Self::Concrete {
-            signature: self.specialize_signature(context.upcast(), args)?,
-            limb_count,
-        })
+        Ok(Self::Concrete { signature: self.specialize_signature(context, args)?, limb_count })
     }
 }
 pub struct ConcreteU96LimbsLessThanGuaranteeVerifyLibfunc {
@@ -989,13 +995,16 @@ impl NoGenericArgsGenericLibfunc for TryIntoCircuitModulusLibFunc {
         context: &dyn SignatureSpecializationContext,
     ) -> Result<LibfuncSignature, SpecializationError> {
         let u96_ty = get_u96_type(context)?;
-        let value_type = context.get_concrete_type(StructType::id(), &[
-            GenericArg::UserType(UserTypeId::from_string("Tuple")),
-            GenericArg::Type(u96_ty.clone()),
-            GenericArg::Type(u96_ty.clone()),
-            GenericArg::Type(u96_ty.clone()),
-            GenericArg::Type(u96_ty),
-        ])?;
+        let value_type = context.get_concrete_type(
+            StructType::id(),
+            &[
+                GenericArg::UserType(UserTypeId::from_string("Tuple")),
+                GenericArg::Type(u96_ty.clone()),
+                GenericArg::Type(u96_ty.clone()),
+                GenericArg::Type(u96_ty.clone()),
+                GenericArg::Type(u96_ty),
+            ],
+        )?;
 
         Ok(LibfuncSignature {
             param_signatures: vec![ParamSignature::new(value_type)],
@@ -1078,31 +1087,21 @@ fn get_circuit_info(
             let mut input_offsets = gate_inputs.map(|ty| values[ty]);
 
             if generic_id == AddModGate::ID {
-                add_offsets.push(GateOffsets {
-                    lhs: input_offsets.next().unwrap(),
-                    rhs: input_offsets.next().unwrap(),
-                    output: output_offset,
-                });
+                let [lhs, rhs] = input_offsets.next_array().unwrap();
+                add_offsets.push(GateOffsets { lhs, rhs, output: output_offset });
             } else if generic_id == SubModGate::ID {
                 // output = sub_lhs - sub_rhs => output + sub_rhs = sub_lhs.
-                let sub_lhs = input_offsets.next().unwrap();
-                let sub_rhs = input_offsets.next().unwrap();
+                let [sub_lhs, sub_rhs] = input_offsets.next_array().unwrap();
                 add_offsets.push(GateOffsets { lhs: output_offset, rhs: sub_rhs, output: sub_lhs });
             } else if generic_id == MulModGate::ID {
-                mul_offsets.push(GateOffsets {
-                    lhs: input_offsets.next().unwrap(),
-                    rhs: input_offsets.next().unwrap(),
-                    output: output_offset,
-                });
+                let [lhs, rhs] = input_offsets.next_array().unwrap();
+                mul_offsets.push(GateOffsets { lhs, rhs, output: output_offset });
             } else if generic_id == InverseGate::ID {
                 // output = 1 / input => 1 = output * input.
                 // Note that the gate will fail if the input is not invertible.
                 // Evaluating this gate successfully implies that input is invertible.
-                mul_offsets.push(GateOffsets {
-                    lhs: output_offset,
-                    rhs: input_offsets.next().unwrap(),
-                    output: ONE_OFFSET,
-                });
+                let rhs = input_offsets.next().unwrap();
+                mul_offsets.push(GateOffsets { lhs: output_offset, rhs, output: ONE_OFFSET });
             } else {
                 return Err(SpecializationError::UnsupportedGenericArg);
             };

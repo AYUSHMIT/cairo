@@ -1,4 +1,4 @@
-use core::starknet::storage::{StoragePointerWriteAccess, StoragePointerReadAccess};
+use starknet::storage::{StoragePointerReadAccess, StoragePointerWriteAccess};
 
 #[starknet::component]
 mod comp_v0 {

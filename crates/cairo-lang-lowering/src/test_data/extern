@@ -330,7 +330,7 @@ End:
 test_function_lowering(expect_diagnostics: false)
 
 //! > function
-fn foo(mut arr: Array::<felt252>, mut b: (felt252,)) -> Array::<felt252> {
+fn foo(mut arr: Array<felt252>, mut b: (felt252,)) -> Array<felt252> {
     let y = match f(ref arr, ref b) {
         MyEnum::A(_x) => arr,
     };
@@ -344,7 +344,7 @@ foo
 enum MyEnum {
     A: felt252,
 }
-extern fn f(ref arr: Array::<felt252>, ref b: (felt252,)) -> MyEnum nopanic;
+extern fn f(ref arr: Array<felt252>, ref b: (felt252,)) -> MyEnum nopanic;
 
 //! > semantic_diagnostics
 
@@ -397,13 +397,15 @@ End:
 
 blk1:
 Statements:
+  (v6: core::gas::GasBuiltin) <- core::gas::redeposit_gas(v3)
 End:
-  Return(v2, v3)
+  Return(v2, v6)
 
 blk2:
 Statements:
+  (v7: core::gas::GasBuiltin) <- core::gas::redeposit_gas(v5)
 End:
-  Return(v4, v5)
+  Return(v4, v7)
 
 //! > ==========================================================================
 
@@ -413,7 +415,7 @@ End:
 test_function_lowering(expect_diagnostics: false)
 
 //! > function
-fn foo() -> Option::<()> {
+fn foo() -> Option<()> {
     gas::withdraw_gas()
 }
 
@@ -438,17 +440,19 @@ End:
 
 blk1:
 Statements:
-  (v6: ()) <- struct_construct()
-  (v7: core::option::Option::<()>) <- Option::Some(v6)
+  (v6: core::gas::GasBuiltin) <- core::gas::redeposit_gas(v3)
+  (v7: ()) <- struct_construct()
+  (v8: core::option::Option::<()>) <- Option::Some(v7)
 End:
-  Return(v2, v3, v7)
+  Return(v2, v6, v8)
 
 blk2:
 Statements:
-  (v8: ()) <- struct_construct()
-  (v9: core::option::Option::<()>) <- Option::None(v8)
+  (v9: core::gas::GasBuiltin) <- core::gas::redeposit_gas(v5)
+  (v10: ()) <- struct_construct()
+  (v11: core::option::Option::<()>) <- Option::None(v10)
 End:
-  Return(v4, v5, v9)
+  Return(v4, v9, v11)
 
 //! > ==========================================================================
 
@@ -458,7 +462,7 @@ End:
 test_function_lowering(expect_diagnostics: false)
 
 //! > function
-fn foo() -> Option::<()> {
+fn foo() -> Option<()> {
     return gas::withdraw_gas();
 }
 
@@ -483,14 +487,16 @@ End:
 
 blk1:
 Statements:
-  (v6: ()) <- struct_construct()
-  (v7: core::option::Option::<()>) <- Option::Some(v6)
+  (v6: core::gas::GasBuiltin) <- core::gas::redeposit_gas(v3)
+  (v7: ()) <- struct_construct()
+  (v8: core::option::Option::<()>) <- Option::Some(v7)
 End:
-  Return(v2, v3, v7)
+  Return(v2, v6, v8)
 
 blk2:
 Statements:
-  (v8: ()) <- struct_construct()
-  (v9: core::option::Option::<()>) <- Option::None(v8)
+  (v9: core::gas::GasBuiltin) <- core::gas::redeposit_gas(v5)
+  (v10: ()) <- struct_construct()
+  (v11: core::option::Option::<()>) <- Option::None(v10)
 End:
-  Return(v4, v5, v9)
+  Return(v4, v9, v11)

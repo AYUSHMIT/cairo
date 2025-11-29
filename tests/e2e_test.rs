@@ -1,12 +1,12 @@
 use std::ops::DerefMut;
-use std::sync::{Arc, LazyLock, Mutex};
+use std::sync::{LazyLock, Mutex};
 
 use cairo_lang_compiler::db::RootDatabase;
 use cairo_lang_compiler::diagnostics::DiagnosticsReporter;
-use cairo_lang_lowering::db::LoweringGroup;
-use cairo_lang_lowering::optimizations::config::OptimizationConfig;
+use cairo_lang_lowering::db::lowering_group_input;
+use cairo_lang_lowering::optimizations::config::{OptimizationConfig, Optimizations};
 use cairo_lang_semantic::test_utils::setup_test_module;
-use cairo_lang_sierra::extensions::gas::CostTokenType;
+use cairo_lang_sierra::extensions::gas::{CostTokenMap, CostTokenType};
 use cairo_lang_sierra::ids::FunctionId;
 use cairo_lang_sierra::program::{Function, Program};
 use cairo_lang_sierra_generator::db::SierraGenGroup;
@@ -14,31 +14,36 @@ use cairo_lang_sierra_generator::program_generator::SierraProgramWithDebug;
 use cairo_lang_sierra_generator::replace_ids::replace_sierra_ids_in_program;
 use cairo_lang_sierra_to_casm::compiler;
 use cairo_lang_sierra_to_casm::metadata::{MetadataComputationConfig, calc_metadata};
+use cairo_lang_sierra_type_size::ProgramRegistryInfo;
 use cairo_lang_test_utils::parse_test_file::{TestFileRunner, TestRunnerResult};
 use cairo_lang_test_utils::test_lock;
+use cairo_lang_utils::Intern;
 use cairo_lang_utils::ordered_hash_map::OrderedHashMap;
 use cairo_lang_utils::unordered_hash_map::UnorderedHashMap;
 use itertools::Itertools;
+use salsa::Setter;
 
 /// Salsa databases configured to find the corelib, when reused by different tests should be able to
 /// use the cached queries that rely on the corelib's code, which vastly reduces the tests runtime.
 static SHARED_DB_WITH_GAS_NO_OPTS: LazyLock<Mutex<RootDatabase>> = LazyLock::new(|| {
     let mut db = RootDatabase::builder().detect_corelib().build().unwrap();
-    db.set_optimization_config(Arc::new(
+    lowering_group_input(&db).set_optimizations(&mut db).to(Some(Optimizations::Enabled(
         OptimizationConfig::default().with_skip_const_folding(true),
-    ));
+    )));
     Mutex::new(db)
 });
 static SHARED_DB_NO_GAS_NO_OPTS: LazyLock<Mutex<RootDatabase>> = LazyLock::new(|| {
     let mut db = RootDatabase::builder().detect_corelib().skip_auto_withdraw_gas().build().unwrap();
-    db.set_optimization_config(Arc::new(
+    lowering_group_input(&db).set_optimizations(&mut db).to(Some(Optimizations::Enabled(
         OptimizationConfig::default().with_skip_const_folding(true),
-    ));
+    )));
     Mutex::new(db)
 });
 static SHARED_DB_WITH_OPTS: LazyLock<Mutex<RootDatabase>> = LazyLock::new(|| {
     let mut db = RootDatabase::builder().detect_corelib().skip_auto_withdraw_gas().build().unwrap();
-    db.set_optimization_config(Arc::new(OptimizationConfig::default()));
+    lowering_group_input(&db)
+        .set_optimizations(&mut db)
+        .to(Some(Optimizations::Enabled(Default::default())));
     Mutex::new(db)
 });
 
@@ -57,6 +62,7 @@ cairo_lang_test_utils::test_file_test_with_runner!(
     {
         array: "array",
         bitwise: "bitwise",
+        blake: "blake",
         bool: "bool",
         bounded_int: "bounded_int",
         box_: "box",
@@ -71,6 +77,7 @@ cairo_lang_test_utils::test_file_test_with_runner!(
         felt252_downcast: "felt252_downcast",
         felt252: "felt252",
         fixed_size_array: "fixed_size_array",
+        gas_reserve: "gas_reserve",
         i128: "i128",
         i16: "i16",
         i32: "i32",
@@ -78,6 +85,7 @@ cairo_lang_test_utils::test_file_test_with_runner!(
         i8: "i8",
         nullable: "nullable",
         poseidon: "poseidon",
+        qm31: "qm31",
         range: "range",
         snapshot: "snapshot",
         u128: "u128",
@@ -153,10 +161,10 @@ impl TestFileRunner for WithOptsE2ETestRunner {
         inputs: &OrderedHashMap<String, String>,
         _args: &OrderedHashMap<String, String>,
     ) -> TestRunnerResult {
-        run_e2e_test(inputs, E2eTestParams {
-            skip_optimization_passes: false,
-            ..Default::default()
-        })
+        run_e2e_test(
+            inputs,
+            E2eTestParams { skip_optimization_passes: false, ..Default::default() },
+        )
     }
 }
 
@@ -180,11 +188,14 @@ impl TestFileRunner for SmallE2ETestRunnerMetadataComputation {
         inputs: &OrderedHashMap<String, String>,
         _args: &OrderedHashMap<String, String>,
     ) -> TestRunnerResult {
-        run_e2e_test(inputs, E2eTestParams {
-            add_withdraw_gas: false,
-            metadata_computation: true,
-            skip_optimization_passes: true,
-        })
+        run_e2e_test(
+            inputs,
+            E2eTestParams {
+                add_withdraw_gas: false,
+                metadata_computation: true,
+                skip_optimization_passes: true,
+            },
+        )
     }
 }
 
@@ -222,20 +233,25 @@ fn run_e2e_test(
         &SHARED_DB_NO_GAS_NO_OPTS
     });
     // Parse code and create semantic model.
-    let test_module = setup_test_module(locked_db.deref_mut(), inputs["cairo"].as_str()).unwrap();
+    let db_ref = locked_db.deref_mut();
+    let test_module = setup_test_module(db_ref, inputs["cairo_code"].as_str()).unwrap();
+    let crate_input = test_module.crate_id.long(db_ref).clone().into_crate_input(db_ref);
     let db = locked_db.snapshot();
-    DiagnosticsReporter::stderr().with_crates(&[test_module.crate_id]).ensure(&db).unwrap();
+    DiagnosticsReporter::stderr()
+        .with_crates(std::slice::from_ref(&crate_input))
+        .ensure(&db)
+        .unwrap();
 
     // Compile to Sierra.
-    let SierraProgramWithDebug { program: sierra_program, .. } =
-        Arc::unwrap_or_clone(db.get_sierra_program(vec![test_module.crate_id]).expect(
-            "`get_sierra_program` failed. run with RUST_LOG=warn (or less) to see diagnostics",
-        ));
-    let sierra_program = replace_sierra_ids_in_program(&db, &sierra_program);
+    let SierraProgramWithDebug { program: sierra_program, .. } = db
+        .get_sierra_program(vec![crate_input.into_crate_long_id(&db).intern(&db)])
+        .expect("`get_sierra_program` failed. run with RUST_LOG=warn (or less) to see diagnostics");
+    let sierra_program = replace_sierra_ids_in_program(&db, sierra_program);
+    let program_info = ProgramRegistryInfo::new(&sierra_program).unwrap();
     let sierra_program_str = sierra_program.to_string();
 
     // Handle the `enforced_costs` argument.
-    let enforced_costs: OrderedHashMap<FunctionId, OrderedHashMap<CostTokenType, i32>> =
+    let enforced_costs: OrderedHashMap<FunctionId, CostTokenMap<i32>> =
         if let Some(enforced_costs_str) = inputs.get("enforced_costs") {
             parse_enforced_costs(&sierra_program, enforced_costs_str)
         } else {
@@ -248,13 +264,15 @@ fn run_e2e_test(
         compute_runtime_costs: params.metadata_computation,
         ..Default::default()
     };
-    let metadata_with_linear = calc_metadata(&sierra_program, metadata_config.clone()).unwrap();
+    let metadata_with_linear =
+        calc_metadata(&sierra_program, &program_info, metadata_config.clone()).unwrap();
 
     let config =
         compiler::SierraToCasmConfig { gas_usage_check: true, max_bytecode_size: usize::MAX };
     // Compile to casm.
-    let casm =
-        compiler::compile(&sierra_program, &metadata_with_linear, config).unwrap().to_string();
+    let casm = compiler::compile(&sierra_program, &program_info, &metadata_with_linear, config)
+        .unwrap()
+        .to_string();
 
     let mut res: OrderedHashMap<String, String> =
         OrderedHashMap::from([("casm".into(), casm), ("sierra_code".into(), sierra_program_str)]);
@@ -262,14 +280,15 @@ fn run_e2e_test(
         metadata_config.linear_gas_solver = false;
         metadata_config.linear_ap_change_solver = false;
         metadata_config.skip_non_linear_solver_comparisons = true;
-        let metadata_with_lp = calc_metadata(&sierra_program, metadata_config).unwrap();
+        let metadata_with_lp =
+            calc_metadata(&sierra_program, &program_info, metadata_config).unwrap();
         res.insert("gas_solution_lp".into(), format!("{}", metadata_with_lp.gas_info));
         res.insert("gas_solution_linear".into(), format!("{}", metadata_with_linear.gas_info));
         res.insert("ap_solution_lp".into(), format!("{}", metadata_with_lp.ap_change_info));
         res.insert("ap_solution_linear".into(), format!("{}", metadata_with_linear.ap_change_info));
 
         // Compile again, this time with the no-solver metadata.
-        compiler::compile(&sierra_program, &metadata_with_lp, config).unwrap();
+        compiler::compile(&sierra_program, &program_info, &metadata_with_lp, config).unwrap();
     } else {
         let function_costs_str = metadata_with_linear
             .gas_info
@@ -277,7 +296,7 @@ fn run_e2e_test(
             .iter()
             .map(|(func_id, cost)| format!("{func_id}: {cost:?}"))
             .join("\n");
-        res.insert("function_costs".into(), function_costs_str.to_string());
+        res.insert("function_costs".into(), function_costs_str);
     }
 
     TestRunnerResult::success(res)
@@ -290,7 +309,7 @@ fn run_e2e_test(
 fn parse_enforced_costs(
     sierra_program: &Program,
     enforced_costs_str: &str,
-) -> OrderedHashMap<FunctionId, OrderedHashMap<CostTokenType, i32>> {
+) -> OrderedHashMap<FunctionId, CostTokenMap<i32>> {
     // Create a map from function name to function id.
     let function_name_to_id: UnorderedHashMap<&str, _> = sierra_program
         .funcs

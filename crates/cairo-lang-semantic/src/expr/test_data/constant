@@ -21,6 +21,9 @@ const FELT_FIXED_SIZE_ARRAY: [felt252; 3] = [1, 2, 3];
 
 const OTHER_CONST_REF: felt252 = my_module::CONST_IN_MODULE;
 
+const FIVE: u32 = 5;
+const NON_ZERO_FIVE: NonZero<u32> = FIVE.try_into().unwrap();
+
 mod my_module {
     const CONST_IN_MODULE: felt252 = 1;
 }
@@ -56,41 +59,119 @@ impl Felt252Div of Div<felt252> {
 }
 const CALCULATION_NOT_CORELIB_IMPL: felt252 = 8 / 4;
 
+const FAILING_CALC: felt252 = if true {
+    core::panic_with_felt252('this should fail')
+} else {
+    70
+};
+
+/// Copy of `assert` to avoid getting paths from the corelib.
+const fn assert(cond: bool) {
+    if !cond {
+        core::panic_with_felt252('failed assertion')
+    }
+}
+
+const FUNC_CALC_SUCCESS: () = assert(true);
+const FUNC_CALC_FAILURE: () = assert(false);
+const VALID_EQ: () = assert(1 == 1);
+const VALID_NE: () = assert(1 != 2);
+const VALID_LT: () = assert(1_usize < 2);
+const VALID_LE: () = assert(1_usize <= 1);
+const VALID_GT: () = assert(2_usize > 1);
+const VALID_GE: () = assert(1_usize >= 1);
+const VALID_DIVREM: () = assert(DivRem::div_rem(5_u8, 2) == (2, 1));
+use core::num::traits::Pow;
+
+const VALID_POW_MIN2_0: () = assert((-2_i8).pow(0) == 1);
+const VALID_POW_MIN2_3: () = assert((-2_i8).pow(3) == -8);
+const VALID_POW_MIN2_6: () = assert((-2_i8).pow(6) == 64);
+
+const VALID_POW_0_0: () = assert(0_felt252.pow(0) == 1);
+const VALID_POW_0_1: () = assert(0_felt252.pow(1) == 0);
+const VALID_POW_0_2: () = assert(0_felt252.pow(2) == 0);
+
+const VALID_POW_2_0: () = assert(2_felt252.pow(0) == 0b1);
+const VALID_POW_2_6: () = assert(2_felt252.pow(6) == 0b1000000);
+const VALID_POW_2_10: () = assert(2_felt252.pow(10) == 0b10000000000);
+
+const VALID_NON_ZERO: NonZero<u8> = 1;
+const VALID_UNWRAPPED_NON_ZERO: u8 = VALID_NON_ZERO.into();
+
+const FUNC_CALC_SUCCESS_OPTION: felt252 = Some(5).unwrap();
+const FUNC_CALC_SUCCESS_RESULT1: felt252 = Result::<_, felt252>::Ok(5).unwrap();
+const FUNC_CALC_SUCCESS_RESULT2: felt252 = Result::<felt252, _>::Err(5).unwrap_err();
+
+const FUNC_CALC_STACK_EXCEEDED: felt252 = call_myself();
+
+const fn call_myself() -> felt252 {
+    call_myself()
+}
+
+const ZERO: u64 = 0;
+const NON_ZERO_ZERO: NonZero<u64> = my_unwrap(ZERO.try_into());
+
+// To avoid getting corelib filesystem paths.
+const fn my_unwrap<T>(v: Option<T>) -> T {
+    match v {
+        Some(v) => v,
+        None => core::panic_with_felt252('bad value'),
+    }
+}
+
 //! > expected_diagnostics
-error: Type not found.
+error[E0006]: Type not found.
  --> lib.cairo:1:17
 const MY_CONST: MissingType = {
-                ^*********^
+                ^^^^^^^^^^^
 
 error: Return statement is not supported outside of functions.
  --> lib.cairo:2:5
     return foo();
-    ^***********^
+    ^^^^^^^^^^^^^
 
 error: The '?' operator is not supported outside of functions.
  --> lib.cairo:3:5
     Option::<felt252>::Some(0)?
-    ^*************************^
-
-error: A numeric literal of type core::bool cannot be created.
- --> lib.cairo:6:42
-const WRONG_TYPE_AND_NOT_LITERAL: bool = 1 + 2;
-                                         ^
-
-error: A numeric literal of type core::bool cannot be created.
- --> lib.cairo:6:46
-const WRONG_TYPE_AND_NOT_LITERAL: bool = 1 + 2;
-                                             ^
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 error: Trait has no implementation in context: core::traits::Add::<core::bool>.
  --> lib.cairo:6:42
 const WRONG_TYPE_AND_NOT_LITERAL: bool = 1 + 2;
-                                         ^***^
+                                         ^^^^^
 
 error: This expression is not supported as constant.
  --> lib.cairo:14:47
 const CALCULATION_NOT_CORELIB_IMPL: felt252 = 8 / 4;
-                                              ^***^
+                                              ^^^^^
+
+error: Failed to calculate constant.
+ --> lib.cairo:17:5
+    core::panic_with_felt252('this should fail')
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: Failed to calculate constant.
+ --> lib.cairo:30:31
+const FUNC_CALC_FAILURE: () = assert(false);
+                              ^^^^^^^^^^^^^
+note: In `test::assert`:
+  --> lib.cairo:25:9
+        core::panic_with_felt252('failed assertion')
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: Constant calculation depth exceeded.
+ --> lib.cairo:59:43
+const FUNC_CALC_STACK_EXCEEDED: felt252 = call_myself();
+                                          ^^^^^^^^^^^^^
+
+error: Failed to calculate constant.
+ --> lib.cairo:66:37
+const NON_ZERO_ZERO: NonZero<u64> = my_unwrap(ZERO.try_into());
+                                    ^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: In `test::my_unwrap::<core::zeroable::NonZero::<core::integer::u64>>`:
+  --> lib.cairo:72:17
+        None => core::panic_with_felt252('bad value'),
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 //! > ==========================================================================
 
@@ -109,11 +190,6 @@ foo
 const DEFAULT_VAR: bool = 1;
 
 //! > expected_diagnostics
-error: A numeric literal of type core::bool cannot be created.
- --> lib.cairo:1:27
-const DEFAULT_VAR: bool = 1;
-                          ^
-
 error: Mismatched types. The type `core::bool` cannot be created from a numeric literal.
  --> lib.cairo:1:27
 const DEFAULT_VAR: bool = 1;
@@ -141,11 +217,6 @@ error: The value does not fit within the range of type core::integer::u8.
 const B: u8 = -1;
               ^^
 
-error: Trait has no implementation in context: core::traits::Neg::<core::integer::u8>.
- --> lib.cairo:1:15
-const B: u8 = -1;
-              ^^
-
 //! > ==========================================================================
 
 //! > Const reference to itself.
@@ -168,17 +239,17 @@ const C: i8 = B;
 error: Cycle detected while resolving 'const' items.
  --> lib.cairo:1:1
 const A: i8 = A;
-^**************^
+^^^^^^^^^^^^^^^^
 
 error: Cycle detected while resolving 'const' items.
  --> lib.cairo:2:1
 const B: i8 = C;
-^**************^
+^^^^^^^^^^^^^^^^
 
 error: Cycle detected while resolving 'const' items.
  --> lib.cairo:3:1
 const C: i8 = B;
-^**************^
+^^^^^^^^^^^^^^^^
 
 //! > ==========================================================================
 
@@ -231,67 +302,26 @@ const COMPLEX_STRUCT: ComplexStruct = ComplexStruct {
 
 const CONST_MEMBER: u8 = COMPLEX_STRUCT.a;
 
-//! > semantic_diagnostics
-error: The value does not fit within the range of type core::integer::u8.
- --> lib.cairo:1:26
-const UNSIGNED_VAR: u8 = 256;
-                         ^*^
-
-error: The value does not fit within the range of type core::integer::i8.
- --> lib.cairo:2:24
-const SIGNED_VAR: i8 = 128;
-                       ^*^
-
-error: The value does not fit within the range of type core::integer::i8.
- --> lib.cairo:5:36
-const OUT_OF_RANGE_NEGATIVE1: i8 = -0x81;
-                                   ^***^
-
-error: The value does not fit within the range of type core::integer::i16.
- --> lib.cairo:6:37
-const OUT_OF_RANGE_NEGATIVE2: i16 = -0x8001;
-                                    ^*****^
-
-error: The value does not fit within the range of type core::zeroable::NonZero::<core::integer::u8>.
- --> lib.cairo:7:36
-const ZERO_NON_ZERO: NonZero<u8> = 0;
-                                   ^
-
-error: The value does not fit within the range of type core::integer::i8.
- --> lib.cairo:9:39
-const CALCULATION_WITH_OVERFLOW: i8 = 120 + 10;
-                                      ^******^
-
-error: This expression is not supported as constant.
- --> lib.cairo:10:39
-const CALCULATION_WITH_DIVISION: u8 = 120 / 0;
-                                      ^*****^
-
-error: The value does not fit within the range of type core::zeroable::NonZero::<core::integer::u8>.
- --> lib.cairo:28:8
-    d: 0,
-       ^
-
 //! > expected_diagnostics
 error: The value does not fit within the range of type core::integer::u8.
  --> lib.cairo:1:26
 const UNSIGNED_VAR: u8 = 256;
-                         ^*^
+                         ^^^
 
 error: The value does not fit within the range of type core::integer::i8.
  --> lib.cairo:2:24
 const SIGNED_VAR: i8 = 128;
-                       ^*^
+                       ^^^
 
 error: The value does not fit within the range of type core::integer::i8.
  --> lib.cairo:5:36
 const OUT_OF_RANGE_NEGATIVE1: i8 = -0x81;
-                                   ^***^
+                                   ^^^^^
 
 error: The value does not fit within the range of type core::integer::i16.
  --> lib.cairo:6:37
 const OUT_OF_RANGE_NEGATIVE2: i16 = -0x8001;
-                                    ^*****^
+                                    ^^^^^^^
 
 error: The value does not fit within the range of type core::zeroable::NonZero::<core::integer::u8>.
  --> lib.cairo:7:36
@@ -301,12 +331,12 @@ const ZERO_NON_ZERO: NonZero<u8> = 0;
 error: The value does not fit within the range of type core::integer::i8.
  --> lib.cairo:9:39
 const CALCULATION_WITH_OVERFLOW: i8 = 120 + 10;
-                                      ^******^
+                                      ^^^^^^^^
 
 error: Division by zero.
  --> lib.cairo:10:39
 const CALCULATION_WITH_DIVISION: u8 = 120 / 0;
-                                      ^*****^
+                                      ^^^^^^^
 
 error: The value does not fit within the range of type core::zeroable::NonZero::<core::integer::u8>.
  --> lib.cairo:31:38
@@ -339,7 +369,7 @@ warning: Unused constant. Consider ignoring by prefixing with `_`.
         const X: u8 = 2;
               ^
 
-error: Identifier not found.
+error[E0006]: Identifier not found.
  --> lib.cairo:5:13
     let y = X;
             ^
@@ -439,3 +469,132 @@ warning: Unused constant. Consider ignoring by prefixing with `_`.
  --> lib.cairo:7:11
     const C: u8 = 6;
           ^
+
+//! > ==========================================================================
+
+//! > Usage of non-consts in consts
+
+//! > test_runner_name
+test_function_diagnostics(expect_diagnostics: true)
+
+//! > function
+fn foo(param: u8) -> () {
+    const A: u8 = param;
+    let local: u8 = 1;
+    const B: u8 = local;
+    const _C: u8 = A + B;
+}
+
+//! > function_name
+foo
+
+//! > module_code
+
+//! > expected_diagnostics
+error: This expression is not supported as constant.
+ --> lib.cairo:2:19
+    const A: u8 = param;
+                  ^^^^^
+
+error: This expression is not supported as constant.
+ --> lib.cairo:4:19
+    const B: u8 = local;
+                  ^^^^^
+
+//! > ==========================================================================
+
+//! > Starknet consts diagnostics
+
+//! > test_runner_name
+test_function_diagnostics(expect_diagnostics: true)
+
+//! > function
+fn foo() {}
+
+//! > function_name
+foo
+
+//! > module_code
+const ADDRESS: starknet::ContractAddress = my_unwrap((-1).try_into());
+const CLASS_HASH: starknet::ClassHash = my_unwrap((-1).try_into());
+
+// To avoid getting corelib filesystem paths.
+const fn my_unwrap<T>(v: Option<T>) -> T {
+    match v {
+        Some(v) => v,
+        None => core::panic_with_felt252('bad value'),
+    }
+}
+
+//! > expected_diagnostics
+error: Failed to calculate constant.
+ --> lib.cairo:1:44
+const ADDRESS: starknet::ContractAddress = my_unwrap((-1).try_into());
+                                           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: In `test::my_unwrap::<core::starknet::contract_address::ContractAddress>`:
+  --> lib.cairo:8:17
+        None => core::panic_with_felt252('bad value'),
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: Failed to calculate constant.
+ --> lib.cairo:2:41
+const CLASS_HASH: starknet::ClassHash = my_unwrap((-1).try_into());
+                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^
+note: In `test::my_unwrap::<core::starknet::class_hash::ClassHash>`:
+  --> lib.cairo:8:17
+        None => core::panic_with_felt252('bad value'),
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+//! > ==========================================================================
+
+//! > Multiple `if let` conditions.
+
+//! > test_runner_name
+test_function_diagnostics(expect_diagnostics: false)
+
+//! > function
+fn foo() {
+    const A: Option<Option<Option<felt252>>> = Some(Some(Some(1_felt252)));
+    const _B: felt252 = if let Some(a) = A && let Some(b) = a && let Some(c) = b {
+        c
+    } else {
+        0
+    };
+}
+
+//! > function_name
+foo
+
+//! > module_code
+
+//! > expected_diagnostics
+
+//! > ==========================================================================
+
+//! > Casts from felt252.
+
+//! > test_runner_name
+test_function_diagnostics(expect_diagnostics: false)
+
+//! > function
+fn foo() {}
+
+//! > function_name
+foo
+
+//! > module_code
+/// Copy of `assert` to avoid getting paths from the corelib.
+const fn assert(cond: bool) {
+    if !cond {
+        core::panic_with_felt252('failed assertion')
+    }
+}
+
+const V: felt252 = 0x800000000000011000000000000000000000000000000000000000000000000;
+const V_AS_I8: () = assert(V.try_into() == Some(-1_i8));
+const V_AS_I16: () = assert(V.try_into() == Some(-1_i16));
+const V_AS_I32: () = assert(V.try_into() == Some(-1_i32));
+const V_AS_I64: () = assert(V.try_into() == Some(-1_i64));
+const V_AS_I128: () = assert(V.try_into() == Some(-1_i128));
+
+//! > expected_diagnostics

@@ -20,6 +20,7 @@ ItemUse
     ├── attributes (kind: AttributeList) []
     ├── visibility (kind: VisibilityDefault) []
     ├── use_kw (kind: TokenUse): 'use'
+    ├── dollar (kind: OptionTerminalDollarEmpty) []
     ├── use_path (kind: UsePathSingle)
     │   ├── ident (kind: PathSegmentSimple)
     │   │   └── ident (kind: TokenIdentifier): 'X'
@@ -57,12 +58,15 @@ ItemUse
     │       ├── hash (kind: TokenHash): '#'
     │       ├── lbrack (kind: TokenLBrack): '['
     │       ├── attr (kind: ExprPath)
-    │       │   └── item #0 (kind: PathSegmentSimple)
-    │       │       └── ident (kind: TokenIdentifier): 'attribute'
+    │       │   ├── dollar (kind: OptionTerminalDollarEmpty) []
+    │       │   └── segments (kind: ExprPathInner)
+    │       │       └── item #0 (kind: PathSegmentSimple)
+    │       │           └── ident (kind: TokenIdentifier): 'attribute'
     │       ├── arguments (kind: OptionArgListParenthesizedEmpty) []
     │       └── rbrack (kind: TokenRBrack): ']'
     ├── visibility (kind: VisibilityDefault) []
     ├── use_kw (kind: TokenUse): 'use'
+    ├── dollar (kind: OptionTerminalDollarEmpty) []
     ├── use_path (kind: UsePathSingle)
     │   ├── ident (kind: PathSegmentSimple)
     │   │   └── ident (kind: TokenIdentifier): 'X'
@@ -97,6 +101,7 @@ ItemUse
     ├── attributes (kind: AttributeList) []
     ├── visibility (kind: VisibilityDefault) []
     ├── use_kw (kind: TokenUse): 'use'
+    ├── dollar (kind: OptionTerminalDollarEmpty) []
     ├── use_path (kind: UsePathSingle)
     │   ├── ident (kind: PathSegmentSimple)
     │   │   └── ident (kind: TokenIdentifier): 'X'
@@ -132,12 +137,15 @@ ItemUse
     │       ├── hash (kind: TokenHash): '#'
     │       ├── lbrack (kind: TokenLBrack): '['
     │       ├── attr (kind: ExprPath)
-    │       │   └── item #0 (kind: PathSegmentSimple)
-    │       │       └── ident (kind: TokenIdentifier): 'attribute'
+    │       │   ├── dollar (kind: OptionTerminalDollarEmpty) []
+    │       │   └── segments (kind: ExprPathInner)
+    │       │       └── item #0 (kind: PathSegmentSimple)
+    │       │           └── ident (kind: TokenIdentifier): 'attribute'
     │       ├── arguments (kind: OptionArgListParenthesizedEmpty) []
     │       └── rbrack (kind: TokenRBrack): ']'
     ├── visibility (kind: VisibilityDefault) []
     ├── use_kw (kind: TokenUse): 'use'
+    ├── dollar (kind: OptionTerminalDollarEmpty) []
     ├── use_path (kind: UsePathSingle)
     │   ├── ident (kind: PathSegmentSimple)
     │   │   └── ident (kind: TokenIdentifier): 'X'
@@ -155,7 +163,7 @@ test_partial_parser_tree(expect_diagnostics: false)
 
 //! > cairo_code
 fn foo() {
-    use X::{A, *, B};
+    use X::{*, A, B};
 }
 
 //! > top_level_kind
@@ -170,6 +178,7 @@ ItemUse
     ├── attributes (kind: AttributeList) []
     ├── visibility (kind: VisibilityDefault) []
     ├── use_kw (kind: TokenUse): 'use'
+    ├── dollar (kind: OptionTerminalDollarEmpty) []
     ├── use_path (kind: UsePathSingle)
     │   ├── ident (kind: PathSegmentSimple)
     │   │   └── ident (kind: TokenIdentifier): 'X'
@@ -177,13 +186,13 @@ ItemUse
     │   └── use_path (kind: UsePathMulti)
     │       ├── lbrace (kind: TokenLBrace): '{'
     │       ├── use_paths (kind: UsePathList)
-    │       │   ├── item #0 (kind: UsePathLeaf)
+    │       │   ├── item #0 (kind: UsePathStar)
+    │       │   │   └── star (kind: TokenMul): '*'
+    │       │   ├── separator #0 (kind: TokenComma): ','
+    │       │   ├── item #1 (kind: UsePathLeaf)
     │       │   │   ├── ident (kind: PathSegmentSimple)
     │       │   │   │   └── ident (kind: TokenIdentifier): 'A'
     │       │   │   └── alias_clause (kind: OptionAliasClauseEmpty) []
-    │       │   ├── separator #0 (kind: TokenComma): ','
-    │       │   ├── item #1 (kind: UsePathStar)
-    │       │   │   └── star (kind: TokenMul): '*'
     │       │   ├── separator #1 (kind: TokenComma): ','
     │       │   └── item #2 (kind: UsePathLeaf)
     │       │       ├── ident (kind: PathSegmentSimple)

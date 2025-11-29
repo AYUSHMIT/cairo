@@ -1,12 +1,10 @@
-use std::iter;
-
 use cairo_lang_casm::ap_change::{ApChangeError, ApplyApChange};
 use cairo_lang_sierra::edit_state::{put_results, take_args};
 use cairo_lang_sierra::ids::{ConcreteTypeId, FunctionId, VarId};
 use cairo_lang_sierra::program::{BranchInfo, Function, StatementIdx};
 use cairo_lang_sierra_type_size::TypeSizeMap;
 use cairo_lang_utils::unordered_hash_set::UnorderedHashSet;
-use itertools::zip_eq;
+use itertools::{chain, zip_eq};
 use thiserror::Error;
 
 use crate::environment::ap_tracking::update_ap_tracking;
@@ -67,12 +65,13 @@ pub enum AnnotationError {
     ApTrackingAlreadyEnabled { statement_idx: StatementIdx },
     #[error(
         "#{source_statement_idx}->#{destination_statement_idx}: Got '{error}' error while moving \
-         {var_id}."
+         {var_id} introduced at {introduction_point}."
     )]
     ApChangeError {
         var_id: VarId,
         source_statement_idx: StatementIdx,
         destination_statement_idx: StatementIdx,
+        introduction_point: IntroductionPoint,
         error: ApChangeError,
     },
     #[error("#{source_statement_idx} -> #{destination_statement_idx}: Ap tracking error")]
@@ -90,6 +89,26 @@ pub enum AnnotationError {
         expected: ApTracking,
         actual: ApTracking,
     },
+}
+
+impl AnnotationError {
+    pub fn stmt_indices(&self) -> Vec<StatementIdx> {
+        match self {
+            AnnotationError::ApChangeError {
+                source_statement_idx,
+                destination_statement_idx,
+                introduction_point,
+                ..
+            } => chain!(
+                [source_statement_idx, destination_statement_idx],
+                &introduction_point.source_statement_idx,
+                [&introduction_point.destination_statement_idx]
+            )
+            .cloned()
+            .collect(),
+            _ => vec![],
+        }
+    }
 }
 
 /// Error representing an inconsistency in the references annotations.
@@ -111,13 +130,13 @@ pub enum InconsistentReferenceError {
     ApTrackingDisabled(VarId),
 }
 
-/// Annotation that represent the state at each program statement.
+/// Annotation that represents the state at each program statement.
 #[derive(Clone, Debug)]
 pub struct StatementAnnotations {
     pub refs: StatementRefs,
     /// The function id that the statement belongs to.
     pub function_id: FunctionId,
-    /// Indicates whether convergence in allowed in the given statement.
+    /// Indicates whether convergence is allowed in the given statement.
     pub convergence_allowed: bool,
     pub environment: Environment,
 }
@@ -133,7 +152,7 @@ pub struct ProgramAnnotations {
 impl ProgramAnnotations {
     fn new(n_statements: usize, backwards_jump_indices: UnorderedHashSet<StatementIdx>) -> Self {
         ProgramAnnotations {
-            per_statement_annotations: iter::repeat_with(|| None).take(n_statements).collect(),
+            per_statement_annotations: vec![None; n_statements],
             backwards_jump_indices,
         }
     }
@@ -150,18 +169,21 @@ impl ProgramAnnotations {
     ) -> Result<Self, AnnotationError> {
         let mut annotations = ProgramAnnotations::new(n_statements, backwards_jump_indices);
         for func in functions {
-            annotations.set_or_assert(func.entry_point, StatementAnnotations {
-                refs: build_function_parameters_refs(func, type_sizes).map_err(|error| {
-                    AnnotationError::ReferencesError { statement_idx: func.entry_point, error }
-                })?,
-                function_id: func.id.clone(),
-                convergence_allowed: false,
-                environment: Environment::new(if gas_usage_check {
-                    GasWallet::Value(metadata.gas_info.function_costs[&func.id].clone())
-                } else {
-                    GasWallet::Disabled
-                }),
-            })?
+            annotations.set_or_assert(
+                func.entry_point,
+                StatementAnnotations {
+                    refs: build_function_parameters_refs(func, type_sizes).map_err(|error| {
+                        AnnotationError::ReferencesError { statement_idx: func.entry_point, error }
+                    })?,
+                    function_id: func.id.clone(),
+                    convergence_allowed: false,
+                    environment: Environment::new(if gas_usage_check {
+                        GasWallet::Value(metadata.gas_info.function_costs[&func.id].clone())
+                    } else {
+                        GasWallet::Disabled
+                    }),
+                },
+            )?
         }
 
         Ok(annotations)
@@ -199,7 +221,7 @@ impl ProgramAnnotations {
                 )?;
 
                 // Note that we ignore annotations here.
-                // a flow cannot converge with a branch target.
+                // A flow cannot converge with a branch target.
                 if !expected_annotations.convergence_allowed {
                     return Err(AnnotationError::InvalidConvergence { statement_idx });
                 }
@@ -215,7 +237,7 @@ impl ProgramAnnotations {
         actual: &StatementAnnotations,
         expected: &StatementAnnotations,
     ) -> Result<(), InconsistentReferenceError> {
-        // Check if there is a mismatch at the number of variables.
+        // Check if there is a mismatch in the number of variables.
         if actual.refs.len() != expected.refs.len() {
             return Err(InconsistentReferenceError::VariableCountMismatch);
         }
@@ -267,13 +289,16 @@ impl ProgramAnnotations {
         let mut updated = if self.backwards_jump_indices.contains(&statement_idx) {
             existing.clone()
         } else {
-            std::mem::replace(existing, StatementAnnotations {
-                refs: Default::default(),
-                function_id: existing.function_id.clone(),
-                // Merging with this data is no longer allowed.
-                convergence_allowed: false,
-                environment: existing.environment.clone(),
-            })
+            std::mem::replace(
+                existing,
+                StatementAnnotations {
+                    refs: Default::default(),
+                    function_id: existing.function_id.clone(),
+                    // Merging with this data is no longer allowed.
+                    convergence_allowed: false,
+                    environment: existing.environment.clone(),
+                },
+            )
         };
         let refs = std::mem::take(&mut updated.refs);
         let (statement_refs, taken_refs) = take_args(refs, ref_ids).map_err(|error| {
@@ -315,6 +340,7 @@ impl ProgramAnnotations {
                         var_id: var_id.clone(),
                         source_statement_idx,
                         destination_statement_idx,
+                        introduction_point: ref_value.introduction_point.clone(),
                         error,
                     })?;
         }
@@ -391,25 +417,28 @@ impl ProgramAnnotations {
             }
         };
 
-        self.set_or_assert(destination_statement_idx, StatementAnnotations {
-            refs,
-            function_id: annotations.function_id,
-            convergence_allowed: !must_set,
-            environment: Environment {
-                ap_tracking,
-                stack_size,
-                frame_state: annotations.environment.frame_state,
-                gas_wallet: annotations
-                    .environment
-                    .gas_wallet
-                    .update(branch_changes.gas_change)
-                    .map_err(|error| AnnotationError::GasWalletError {
-                        source_statement_idx,
-                        destination_statement_idx,
-                        error,
-                    })?,
+        self.set_or_assert(
+            destination_statement_idx,
+            StatementAnnotations {
+                refs,
+                function_id: annotations.function_id,
+                convergence_allowed: !must_set,
+                environment: Environment {
+                    ap_tracking,
+                    stack_size,
+                    frame_state: annotations.environment.frame_state,
+                    gas_wallet: annotations
+                        .environment
+                        .gas_wallet
+                        .update(branch_changes.gas_change)
+                        .map_err(|error| AnnotationError::GasWalletError {
+                            source_statement_idx,
+                            destination_statement_idx,
+                            error,
+                        })?,
+                },
             },
-        })
+        )
     }
 
     /// Validates the ap change and return types in a return statement.

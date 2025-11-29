@@ -42,7 +42,7 @@ pub enum VarState {
     ZeroSizedVar,
     /// The variable was consumed and can no longer be used.
     /// This state is used because there is no efficient way of removing variables
-    /// from [VariablesState::variables] without effecting their order.
+    /// from [VariablesState::variables] without affecting their order.
     Removed,
 }
 
@@ -50,7 +50,7 @@ pub enum VarState {
 /// For example, which variable contains a deferred value and which variable is on the stack.
 #[derive(Clone, Debug, Default)]
 pub struct VariablesState {
-    /// A map from [sierra::ids::VarId] of to its state.
+    /// A map from [sierra::ids::VarId] to its state.
     pub variables: OrderedHashMap<sierra::ids::VarId, VarState>,
     /// The information known about the top of the stack.
     pub known_stack: KnownStack,
@@ -66,7 +66,7 @@ impl VariablesState {
         arg_states: &[VarState],
     ) {
         // Clear the stack if needed.
-        match branch_signature.ap_change {
+        match &branch_signature.ap_change {
             SierraApChange::BranchAlign
             | SierraApChange::Unknown
             | SierraApChange::Known { new_vars_only: false } => {
@@ -75,6 +75,9 @@ impl VariablesState {
                 self.clear_known_stack();
             }
             SierraApChange::Known { new_vars_only: true } => {}
+            SierraApChange::FunctionCall(id) => {
+                unreachable!("Missing ap-change for function `{id}`.")
+            }
         }
 
         for (var, var_info) in itertools::zip_eq(results, &branch_signature.vars) {

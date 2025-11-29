@@ -1,16 +1,15 @@
 use cairo_lang_syntax as syntax;
 use cairo_lang_syntax::node::SyntaxNode;
-use cairo_lang_syntax::node::db::SyntaxGroup;
 use cairo_lang_syntax::node::kind::SyntaxKind;
 use cairo_lang_syntax_codegen::cairo_spec::get_spec;
 use cairo_lang_syntax_codegen::spec::{Member, Node, NodeKind};
 use colored::{ColoredString, Colorize};
 use itertools::zip_eq;
-use smol_str::SmolStr;
+use salsa::Database;
 
 pub fn print_tree(
-    db: &dyn SyntaxGroup,
-    syntax_root: &SyntaxNode,
+    db: &dyn Database,
+    syntax_root: &SyntaxNode<'_>,
     print_colors: bool,
     print_trivia: bool,
 ) -> String {
@@ -20,8 +19,8 @@ pub fn print_tree(
 }
 
 pub fn print_partial_tree(
-    db: &dyn SyntaxGroup,
-    syntax_root: &SyntaxNode,
+    db: &dyn Database,
+    syntax_root: &SyntaxNode<'_>,
     top_level_kind: &str,
     ignored_kinds: Vec<&str>,
     print_trivia: bool,
@@ -33,7 +32,7 @@ pub fn print_partial_tree(
 }
 
 struct Printer<'a> {
-    db: &'a dyn SyntaxGroup,
+    db: &'a dyn Database,
     spec: Vec<Node>,
     print_colors: bool,
     print_trivia: bool,
@@ -46,7 +45,7 @@ struct Printer<'a> {
     result: String,
 }
 impl<'a> Printer<'a> {
-    fn new(db: &'a dyn SyntaxGroup, print_colors: bool, print_trivia: bool) -> Self {
+    fn new(db: &'a dyn Database, print_colors: bool, print_trivia: bool) -> Self {
         Self {
             db,
             spec: get_spec(),
@@ -60,7 +59,7 @@ impl<'a> Printer<'a> {
 
     /// Create a new printer that is capable of partial printing of the syntax tree.
     fn new_partial(
-        db: &'a dyn SyntaxGroup,
+        db: &'a dyn Database,
         top_level_kind: &str,
         ignored_kinds: Vec<&str>,
         print_trivia: bool,
@@ -84,7 +83,7 @@ impl<'a> Printer<'a> {
     fn print_tree(
         &mut self,
         field_description: &str,
-        syntax_node: &SyntaxNode,
+        syntax_node: &SyntaxNode<'_>,
         indent: &str,
         is_last: bool,
         under_top_level: bool,
@@ -98,7 +97,7 @@ impl<'a> Printer<'a> {
                         field_description,
                         indent,
                         extra_head_indent,
-                        text.clone(),
+                        text.long(self.db),
                         green_node.kind,
                     )
                 }
@@ -122,7 +121,7 @@ impl<'a> Printer<'a> {
         field_description: &str,
         indent: &str,
         extra_head_indent: &str,
-        text: SmolStr,
+        text: &str,
         kind: SyntaxKind,
     ) {
         let text = if kind == SyntaxKind::TokenMissing {
@@ -132,7 +131,7 @@ impl<'a> Printer<'a> {
                 SyntaxKind::TokenWhitespace
                 | SyntaxKind::TokenNewline
                 | SyntaxKind::TokenEndOfFile => ".".to_string(),
-                _ => format!(": '{}'", self.green(self.bold(text.as_str().into()))),
+                _ => format!(": '{}'", self.green(self.bold(text.into()))),
             };
             format!("{} (kind: {:?}){token_text}", self.blue(field_description.into()), kind)
         };
@@ -147,7 +146,7 @@ impl<'a> Printer<'a> {
         indent: &str,
         extra_head_indent: &str,
         is_last: bool,
-        syntax_node: &SyntaxNode,
+        syntax_node: &SyntaxNode<'_>,
         kind: SyntaxKind,
         under_top_level: bool,
     ) {
@@ -157,11 +156,11 @@ impl<'a> Printer<'a> {
         let (under_top_level, indent) =
             if current_is_top_level { (true, "") } else { (under_top_level, indent) };
 
-        if !self.print_trivia {
-            if let Some(token_node) = syntax_node.get_terminal_token(self.db) {
-                self.print_tree(field_description, &token_node, indent, is_last, under_top_level);
-                return;
-            }
+        if !self.print_trivia
+            && let Some(token_node) = syntax_node.get_terminal_token(self.db)
+        {
+            self.print_tree(field_description, &token_node, indent, is_last, under_top_level);
+            return;
         }
 
         let extra_info = if is_missing_kind(kind) {
@@ -170,7 +169,7 @@ impl<'a> Printer<'a> {
             format!(" (kind: {kind:?})")
         };
 
-        let children = self.db.get_children(syntax_node.clone());
+        let children = syntax_node.get_children(self.db);
         let num_children = children.len();
         let suffix = if self.ignored_kinds.contains(&format!("{kind:?}")) {
             " <ignored>".to_string()
@@ -210,7 +209,7 @@ impl<'a> Printer<'a> {
             NodeKind::Struct { members: expected_children }
             | NodeKind::Terminal { members: expected_children, .. } => {
                 self.print_internal_struct(
-                    &children,
+                    children,
                     &expected_children,
                     indent.as_str(),
                     under_top_level,
@@ -229,7 +228,7 @@ impl<'a> Printer<'a> {
             }
             NodeKind::SeparatedList { .. } => {
                 for (i, child) in children.iter().enumerate() {
-                    let description = if i % 2 == 0 { "item" } else { "separator" };
+                    let description = if i.is_multiple_of(2) { "item" } else { "separator" };
                     self.print_tree(
                         format!("{description} #{}", i / 2).as_str(),
                         child,
@@ -247,7 +246,7 @@ impl<'a> Printer<'a> {
     /// `under_top_level`: whether we are in a subtree of the top-level kind.
     fn print_internal_struct(
         &mut self,
-        children: &[SyntaxNode],
+        children: &[SyntaxNode<'_>],
         expected_children: &[Member],
         indent: &str,
         under_top_level: bool,

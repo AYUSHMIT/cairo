@@ -79,7 +79,8 @@ define_libfunc_hierarchy! {
         Mul(BoundedIntMulLibfunc),
         DivRem(BoundedIntDivRemLibfunc),
         Constrain(BoundedIntConstrainLibfunc),
-        Trim(BoundedIntTrimLibfunc),
+        TrimMin(BoundedIntTrimLibfunc<false>),
+        TrimMax(BoundedIntTrimLibfunc<true>),
         IsZero(BoundedIntIsZeroLibfunc),
         WrapNonZero(BoundedIntWrapNonZeroLibfunc),
     }, BoundedIntConcreteLibfunc
@@ -208,11 +209,11 @@ impl NamedLibfunc for BoundedIntDivRemLibfunc {
         Ok(LibfuncSignature::new_non_branch_ex(
             vec![
                 ParamSignature::new(range_check_type.clone()).with_allow_add_const(),
-                ParamSignature::new(lhs.clone()),
+                ParamSignature::new(lhs),
                 ParamSignature::new(nonzero_ty(context, &rhs)?),
             ],
             vec![
-                OutputVarInfo::new_builtin(range_check_type.clone(), 0),
+                OutputVarInfo::new_builtin(range_check_type, 0),
                 OutputVarInfo {
                     ty: bounded_int_ty(context, quotient_min, quotient_max)?,
                     ref_info: OutputVarReferenceInfo::SimpleDerefs,
@@ -232,10 +233,9 @@ impl NamedLibfunc for BoundedIntDivRemLibfunc {
         args: &[GenericArg],
     ) -> Result<Self::Concrete, SpecializationError> {
         let (lhs, rhs) = args_as_two_types(args)?;
-        let context = context.upcast();
         Ok(Self::Concrete {
-            lhs: Range::from_type(context, lhs.clone())?,
-            rhs: Range::from_type(context, rhs.clone())?,
+            lhs: Range::from_type(context, lhs)?,
+            rhs: Range::from_type(context, rhs)?,
             signature: self.specialize_signature(context, args)?,
         })
     }
@@ -370,7 +370,6 @@ impl NamedLibfunc for BoundedIntConstrainLibfunc {
             [_, _] => Err(SpecializationError::UnsupportedGenericArg),
             _ => Err(SpecializationError::WrongNumberOfGenericArgs),
         }?;
-        let context = context.upcast();
         Ok(Self::Concrete { boundary, signature: self.specialize_signature(context, args)? })
     }
 }
@@ -388,46 +387,19 @@ impl SignatureBasedConcreteLibfunc for BoundedIntConstrainConcreteLibfunc {
 /// Libfunc for trimming a BoundedInt<Min, Max> by removing `Min` or `Max` from the range.
 /// The libfunc is also applicable for standard types such as u* and i*.
 #[derive(Default)]
-pub struct BoundedIntTrimLibfunc {}
-impl NamedLibfunc for BoundedIntTrimLibfunc {
+pub struct BoundedIntTrimLibfunc<const IS_MAX: bool> {}
+impl<const IS_MAX: bool> NamedLibfunc for BoundedIntTrimLibfunc<IS_MAX> {
     type Concrete = BoundedIntTrimConcreteLibfunc;
 
-    const STR_ID: &'static str = "bounded_int_trim";
+    const STR_ID: &'static str =
+        if IS_MAX { "bounded_int_trim_max" } else { "bounded_int_trim_min" };
 
     fn specialize_signature(
         &self,
         context: &dyn SignatureSpecializationContext,
         args: &[GenericArg],
     ) -> Result<LibfuncSignature, SpecializationError> {
-        let (ty, trimmed_value) = match args {
-            [GenericArg::Type(ty), GenericArg::Value(trimmed_value)] => Ok((ty, trimmed_value)),
-            [_, _] => Err(SpecializationError::UnsupportedGenericArg),
-            _ => Err(SpecializationError::WrongNumberOfGenericArgs),
-        }?;
-        let ty_info = context.get_type_info(ty.clone())?;
-        let mut range = Range::from_type_info(&ty_info)?;
-        if trimmed_value == &range.lower {
-            range.lower += 1;
-        } else {
-            range.upper -= 1;
-            require(&range.upper == trimmed_value)
-                .ok_or(SpecializationError::UnsupportedGenericArg)?;
-        }
-        let ap_change = SierraApChange::Known { new_vars_only: trimmed_value.is_zero() };
-        Ok(LibfuncSignature {
-            param_signatures: vec![ParamSignature::new(ty.clone())],
-            branch_signatures: vec![
-                BranchSignature { vars: vec![], ap_change: ap_change.clone() },
-                BranchSignature {
-                    vars: vec![OutputVarInfo {
-                        ty: bounded_int_ty(context, range.lower, range.upper - 1)?,
-                        ref_info: OutputVarReferenceInfo::SameAsParam { param_idx: 0 },
-                    }],
-                    ap_change,
-                },
-            ],
-            fallthrough: Some(0),
-        })
+        Ok(Self::Concrete::new::<IS_MAX>(context, args)?.signature)
     }
 
     fn specialize(
@@ -435,19 +407,50 @@ impl NamedLibfunc for BoundedIntTrimLibfunc {
         context: &dyn SpecializationContext,
         args: &[GenericArg],
     ) -> Result<Self::Concrete, SpecializationError> {
-        let trimmed_value = match args {
-            [GenericArg::Type(_), GenericArg::Value(trimmed_value)] => Ok(trimmed_value.clone()),
-            [_, _] => Err(SpecializationError::UnsupportedGenericArg),
-            _ => Err(SpecializationError::WrongNumberOfGenericArgs),
-        }?;
-        let context = context.upcast();
-        Ok(Self::Concrete { trimmed_value, signature: self.specialize_signature(context, args)? })
+        Self::Concrete::new::<IS_MAX>(context, args)
     }
 }
 
 pub struct BoundedIntTrimConcreteLibfunc {
     pub trimmed_value: BigInt,
     signature: LibfuncSignature,
+}
+impl BoundedIntTrimConcreteLibfunc {
+    fn new<const IS_MAX: bool>(
+        context: &dyn SignatureSpecializationContext,
+        args: &[GenericArg],
+    ) -> Result<Self, SpecializationError> {
+        let ty = args_as_single_type(args)?;
+        let ty_info = context.get_type_info(ty.clone())?;
+        let range = Range::from_type_info(&ty_info)?;
+        let (res_ty, trimmed_value) = if IS_MAX {
+            (
+                bounded_int_ty(context, range.lower.clone(), range.upper.clone() - 2)?,
+                range.upper - 1,
+            )
+        } else {
+            (
+                bounded_int_ty(context, range.lower.clone() + 1, range.upper.clone() - 1)?,
+                range.lower,
+            )
+        };
+        let ap_change = SierraApChange::Known { new_vars_only: trimmed_value.is_zero() };
+        let signature = LibfuncSignature {
+            param_signatures: vec![ParamSignature::new(ty)],
+            branch_signatures: vec![
+                BranchSignature { vars: vec![], ap_change: ap_change.clone() },
+                BranchSignature {
+                    vars: vec![OutputVarInfo {
+                        ty: res_ty,
+                        ref_info: OutputVarReferenceInfo::SameAsParam { param_idx: 0 },
+                    }],
+                    ap_change,
+                },
+            ],
+            fallthrough: Some(0),
+        };
+        Ok(Self { trimmed_value, signature })
+    }
 }
 impl SignatureBasedConcreteLibfunc for BoundedIntTrimConcreteLibfunc {
     fn signature(&self) -> &LibfuncSignature {

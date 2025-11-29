@@ -98,24 +98,27 @@ fn test_colored_parsed_code(
     colored::control::set_override(true);
     let db = &SimpleParserDatabase::default();
     let (syntax_root, _) = get_syntax_root_and_diagnostics_from_inputs(db, inputs);
+    use anstream::adapter::strip_str;
+
+    let colored_output = print_colored(db, &syntax_root, bool_input(&inputs["is_verbose"]));
+    let striped_output = strip_str(&colored_output).to_string();
+    assert_ne!(colored_output, striped_output, "The output is not colored");
+
     TestRunnerResult {
-        outputs: OrderedHashMap::from([(
-            "expected_colored".into(),
-            print_colored(db, &syntax_root, bool_input(&inputs["is_verbose"])),
-        )]),
+        outputs: OrderedHashMap::from([("expected".into(), striped_output)]),
         error: None,
     }
 }
 
 /// Returns the syntax_root and diagnostics of a file in the db, according to the parser test
 /// inputs.
-fn get_syntax_root_and_diagnostics_from_inputs(
-    db: &SimpleParserDatabase,
+fn get_syntax_root_and_diagnostics_from_inputs<'a>(
+    db: &'a SimpleParserDatabase,
     inputs: &OrderedHashMap<String, String>,
-) -> (SyntaxNode, String) {
+) -> (SyntaxNode<'a>, String) {
     let (file_path, cairo_code) = get_direct_or_file_content(&inputs["cairo_code"]);
     let file_id = create_virtual_file(db, file_path, &cairo_code);
-    let (syntax_root, diagnostics) = get_syntax_root_and_diagnostics(db, file_id, &cairo_code);
+    let (syntax_root, diagnostics) = get_syntax_root_and_diagnostics(db, file_id);
     (syntax_root, diagnostics.format(db))
 }
 
@@ -142,21 +145,24 @@ cairo_lang_test_utils::test_file_test!(
     diagnostics,
     "src/parser_test_data/diagnostics",
     {
-        expr_diagnostics: "expr_diagnostics",
         enum_diagnostics: "enum_diagnostics",
+        expr_diagnostics: "expr_diagnostics",
         fn_: "fn",
         generic_params: "generic_params",
         if_: "if",
         illegal_string_escapes: "illegal_string_escapes",
+        let_else: "let_else",
         match_: "match",
         module_diagnostics: "module_diagnostics",
+        path: "path",
         pattern: "pattern",
         question_mark: "question_mark",
         reserved_identifier: "reserved_identifier",
         semicolon: "semicolon",
+        skipped_tokens: "skipped_tokens",
         underscore_not_supported: "underscore_not_supported",
         unterminated_string: "unterminated_string",
-        skipped_tokens: "skipped_tokens",
+        while_: "while",
     },
     get_diagnostics
 );
@@ -177,6 +183,7 @@ cairo_lang_test_utils::test_file_test!(
         item_trait: "item_trait",
         item_inline_macro: "item_inline_macro",
         let_statement: "let_statement",
+        let_else: "let_else",
         if_else: "if_else",
         impl_alias: "impl_alias",
         literal: "literal",
@@ -192,8 +199,10 @@ cairo_lang_test_utils::test_file_test!(
         while_: "while",
         for_: "for",
         range: "range",
+        repr_ptr: "repr_ptr",
         use_: "use",
         type_alias: "type_alias",
+        macro_declaration: "macro_declaration",
 },
     test_partial_parser_tree
 );

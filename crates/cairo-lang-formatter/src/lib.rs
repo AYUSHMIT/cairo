@@ -6,11 +6,11 @@ pub mod formatter_impl;
 pub mod node_properties;
 
 use cairo_lang_diagnostics::DiagnosticsBuilder;
-use cairo_lang_filesystem::ids::{FileKind, FileLongId, VirtualFile};
+use cairo_lang_filesystem::ids::{FileKind, FileLongId, SmolStrId, VirtualFile};
 use cairo_lang_parser::parser::Parser;
-use cairo_lang_syntax::node::db::SyntaxGroup;
 use cairo_lang_syntax::node::{SyntaxNode, TypedSyntaxNode};
 use cairo_lang_utils::Intern;
+use salsa::Database;
 use serde::{Deserialize, Serialize};
 
 pub use crate::cairo_formatter::{CairoFormatter, FormatOutcome, StdinFmt};
@@ -29,8 +29,8 @@ pub const CAIRO_FMT_IGNORE: &str = ".cairofmtignore";
 /// # Returns
 /// * `String` - The formatted file.
 pub fn get_formatted_file(
-    db: &dyn SyntaxGroup,
-    syntax_root: &SyntaxNode,
+    db: &dyn Database,
+    syntax_root: &SyntaxNode<'_>,
     config: FormatterConfig,
 ) -> String {
     let mut formatter = FormatterImpl::new(db, config);
@@ -43,13 +43,14 @@ pub fn get_formatted_file(
 /// * `content` - The code to format.
 /// # Returns
 /// * `String` - The formatted code.
-pub fn format_string(db: &dyn SyntaxGroup, content: String) -> String {
+pub fn format_string(db: &dyn Database, content: String) -> String {
     let virtual_file = FileLongId::Virtual(VirtualFile {
         parent: None,
-        name: "string_to_format".into(),
-        content: content.clone().into(),
+        name: SmolStrId::from(db, "string_to_format"),
+        content: SmolStrId::from(db, &content),
         code_mappings: [].into(),
         kind: FileKind::Module,
+        original_item_removed: false,
     })
     .intern(db);
     let mut diagnostics = DiagnosticsBuilder::default();
@@ -69,16 +70,33 @@ pub enum CollectionsBreakingBehavior {
     LineByLine,
 }
 
+/// Impl CollectionsBreakingBehavior from bool, where true is `LineByLine` and false is
+/// `SingleBreakPoint`. This adheres to the existing behavior of the formatter CLI.
+impl From<bool> for CollectionsBreakingBehavior {
+    fn from(b: bool) -> Self {
+        if b {
+            CollectionsBreakingBehavior::LineByLine
+        } else {
+            CollectionsBreakingBehavior::SingleBreakPoint
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BreakingBehaviorConfig {
+    pub tuple: CollectionsBreakingBehavior,
+    pub fixed_array: CollectionsBreakingBehavior,
+    pub macro_call: CollectionsBreakingBehavior,
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub struct FormatterConfig {
-    tab_size: usize,
-    max_line_length: usize,
-    sort_module_level_items: bool,
-    tuple_breaking_behavior: CollectionsBreakingBehavior,
-    fixed_array_breaking_behavior: CollectionsBreakingBehavior,
-    merge_use_items: bool,
-    allow_duplicate_uses: bool,
+    pub tab_size: usize,
+    pub max_line_length: usize,
+    pub sort_module_level_items: bool,
+    pub breaking_behavior: BreakingBehaviorConfig,
+    pub merge_use_items: bool,
+    pub allow_duplicate_uses: bool,
 }
 
 // Config params
@@ -91,8 +109,7 @@ impl FormatterConfig {
         tab_size: usize,
         max_line_length: usize,
         sort_module_level_items: bool,
-        tuple_breaking_behavior: CollectionsBreakingBehavior,
-        fixed_array_breaking_behavior: CollectionsBreakingBehavior,
+        breaking_behavior: BreakingBehaviorConfig,
         merge_use_items: bool,
         allow_duplicate_uses: bool,
     ) -> Self {
@@ -100,33 +117,58 @@ impl FormatterConfig {
             tab_size,
             max_line_length,
             sort_module_level_items,
-            tuple_breaking_behavior,
-            fixed_array_breaking_behavior,
+            breaking_behavior,
             merge_use_items,
             allow_duplicate_uses,
         }
     }
 
-    pub fn sort_module_level_items(mut self, sort_module_level_items: bool) -> Self {
-        self.sort_module_level_items = sort_module_level_items;
+    pub fn sort_module_level_items(mut self, sort_module_level_items: Option<bool>) -> Self {
+        if let Some(sort) = sort_module_level_items {
+            self.sort_module_level_items = sort;
+        }
         self
     }
 
-    pub fn tuple_breaking_behavior(mut self, behavior: CollectionsBreakingBehavior) -> Self {
-        self.tuple_breaking_behavior = behavior;
+    pub fn tuple_breaking_behavior(
+        mut self,
+        behavior: Option<CollectionsBreakingBehavior>,
+    ) -> Self {
+        if let Some(behavior) = behavior {
+            self.breaking_behavior.tuple = behavior;
+        }
         self
     }
 
-    pub fn fixed_array_breaking_behavior(mut self, behavior: CollectionsBreakingBehavior) -> Self {
-        self.fixed_array_breaking_behavior = behavior;
+    pub fn fixed_array_breaking_behavior(
+        mut self,
+        behavior: Option<CollectionsBreakingBehavior>,
+    ) -> Self {
+        if let Some(behavior) = behavior {
+            self.breaking_behavior.fixed_array = behavior;
+        }
         self
     }
-    pub fn merge_use_items(mut self, merge: bool) -> Self {
-        self.merge_use_items = merge;
+
+    pub fn macro_call_breaking_behavior(
+        mut self,
+        behavior: Option<CollectionsBreakingBehavior>,
+    ) -> Self {
+        if let Some(behavior) = behavior {
+            self.breaking_behavior.macro_call = behavior;
+        }
         self
     }
-    pub fn allow_duplicate_uses(mut self, allow: bool) -> Self {
-        self.allow_duplicate_uses = allow;
+    pub fn merge_use_items(mut self, merge: Option<bool>) -> Self {
+        if let Some(merge) = merge {
+            self.merge_use_items = merge;
+        }
+        self
+    }
+    pub fn allow_duplicate_uses(mut self, allow: Option<bool>) -> Self {
+        if let Some(allow) = allow {
+            self.allow_duplicate_uses = allow;
+        }
         self
     }
 }
@@ -135,10 +177,13 @@ impl Default for FormatterConfig {
         Self {
             tab_size: TAB_SIZE,
             max_line_length: MAX_LINE_LENGTH,
-            sort_module_level_items: false,
-            tuple_breaking_behavior: CollectionsBreakingBehavior::LineByLine,
-            fixed_array_breaking_behavior: CollectionsBreakingBehavior::SingleBreakPoint,
-            merge_use_items: false,
+            sort_module_level_items: true,
+            breaking_behavior: BreakingBehaviorConfig {
+                tuple: CollectionsBreakingBehavior::LineByLine,
+                fixed_array: CollectionsBreakingBehavior::SingleBreakPoint,
+                macro_call: CollectionsBreakingBehavior::SingleBreakPoint,
+            },
+            merge_use_items: true,
             allow_duplicate_uses: false,
         }
     }

@@ -1,8 +1,8 @@
-use starknet::{ContractAddress, get_caller_address, contract_address_const};
 use starknet::storage::{
-    StoragePointerReadAccess, StoragePointerWriteAccess, StorageMapReadAccess,
-    StorageMapWriteAccess,
+    StorageMapReadAccess, StorageMapWriteAccess, StoragePointerReadAccess,
+    StoragePointerWriteAccess,
 };
+use starknet::{ContractAddress, get_caller_address};
 
 
 #[starknet::interface]
@@ -35,8 +35,6 @@ pub trait HasStorage<
     fn storage(self: @TContractState) -> StorageImpl::BaseType;
     fn storage_mut(ref self: TContractState) -> StorageImplMut::BaseType;
 }
-
-
 use core::num::traits::Zero;
 use starknet::storage::Map;
 #[starknet::storage_node]
@@ -197,9 +195,7 @@ pub impl ERC20HelperImpl<
         self
             .emit(
                 Event::Transfer(
-                    TransferEvent {
-                        from: contract_address_const::<0>(), to: recipient, value: initial_supply,
-                    },
+                    TransferEvent { from: Zero::zero(), to: recipient, value: initial_supply },
                 ),
             );
     }

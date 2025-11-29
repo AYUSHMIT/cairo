@@ -3,9 +3,14 @@ use itertools::Itertools;
 use num_traits::{ToPrimitive, Zero};
 
 use super::boxing::box_ty;
+use super::consts::ConstGenLibfunc;
 use super::enm::EnumType;
 use super::int::unsigned128::Uint128Type;
 use super::non_zero::NonZeroType;
+use super::starknet::interoperability::{
+    ClassHashConstLibfuncWrapped, ClassHashType, ContractAddressConstLibfuncWrapped,
+    ContractAddressType,
+};
 use super::structure::StructType;
 use super::utils::Range;
 use crate::define_libfunc_hierarchy;
@@ -67,20 +72,26 @@ fn validate_const_data(
     inner_data: &[GenericArg],
 ) -> Result<(), SpecializationError> {
     let inner_type_info = context.get_type_info(inner_ty.clone())?;
-    if inner_type_info.long_id.generic_id == StructType::ID {
-        validate_const_struct_data(context, &inner_type_info, inner_data)?;
-    } else if inner_type_info.long_id.generic_id == EnumType::ID {
-        validate_const_enum_data(context, &inner_type_info, inner_data)?;
-    } else if inner_type_info.long_id.generic_id == NonZeroType::ID {
-        validate_const_nz_data(context, &inner_type_info, inner_data)?;
+    let inner_generic_id = &inner_type_info.long_id.generic_id;
+    if *inner_generic_id == StructType::ID {
+        return validate_const_struct_data(context, &inner_type_info, inner_data);
+    } else if *inner_generic_id == EnumType::ID {
+        return validate_const_enum_data(context, &inner_type_info, inner_data);
+    } else if *inner_generic_id == NonZeroType::ID {
+        return validate_const_nz_data(context, &inner_type_info, inner_data);
+    }
+    let type_range = if *inner_generic_id == ContractAddressType::id() {
+        Range::half_open(0, ContractAddressConstLibfuncWrapped::bound())
+    } else if *inner_generic_id == ClassHashType::id() {
+        Range::half_open(0, ClassHashConstLibfuncWrapped::bound())
     } else {
-        let type_range = Range::from_type_info(&inner_type_info)?;
-        let [GenericArg::Value(value)] = inner_data else {
-            return Err(SpecializationError::WrongNumberOfGenericArgs);
-        };
-        if !(&type_range.lower <= value && value < &type_range.upper) {
-            return Err(SpecializationError::UnsupportedGenericArg);
-        }
+        Range::from_type_info(&inner_type_info)?
+    };
+    let [GenericArg::Value(value)] = inner_data else {
+        return Err(SpecializationError::WrongNumberOfGenericArgs);
+    };
+    if !(&type_range.lower <= value && value < &type_range.upper) {
+        return Err(SpecializationError::UnsupportedGenericArg);
     }
     Ok(())
 }
@@ -266,8 +277,7 @@ impl ConstAsBoxLibfunc {
             _ => Err(SpecializationError::WrongNumberOfGenericArgs),
         }?;
         let segment_id = segment_id.to_u32().ok_or(SpecializationError::UnsupportedGenericArg)?;
-        let (inner_ty, _) =
-            extract_const_info(context.as_type_specialization_context(), const_type)?;
+        let (inner_ty, _) = extract_const_info(context, const_type)?;
         let boxed_inner_ty = box_ty(context, inner_ty)?;
 
         Ok(ConstAsBoxConcreteLibfunc {
@@ -302,7 +312,7 @@ impl NamedLibfunc for ConstAsBoxLibfunc {
         context: &dyn SpecializationContext,
         args: &[GenericArg],
     ) -> Result<Self::Concrete, SpecializationError> {
-        self.specialize_concrete_lib_func(context.upcast(), args)
+        self.specialize_concrete_lib_func(context, args)
     }
 }
 
@@ -328,7 +338,7 @@ impl ConstAsImmediateLibfunc {
         args: &[GenericArg],
     ) -> Result<ConstAsImmediateConcreteLibfunc, SpecializationError> {
         let const_type = args_as_single_type(args)?;
-        let (ty, _) = extract_const_info(context.as_type_specialization_context(), &const_type)?;
+        let (ty, _) = extract_const_info(context, &const_type)?;
         Ok(ConstAsImmediateConcreteLibfunc {
             const_type,
             signature: LibfuncSignature::new_non_branch(
@@ -360,6 +370,6 @@ impl NamedLibfunc for ConstAsImmediateLibfunc {
         context: &dyn SpecializationContext,
         args: &[GenericArg],
     ) -> Result<Self::Concrete, SpecializationError> {
-        self.specialize_concrete_lib_func(context.upcast(), args)
+        self.specialize_concrete_lib_func(context, args)
     }
 }

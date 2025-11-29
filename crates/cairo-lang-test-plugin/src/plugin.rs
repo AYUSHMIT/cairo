@@ -1,7 +1,8 @@
 use cairo_lang_defs::plugin::{MacroPlugin, MacroPluginMetadata, PluginResult};
+use cairo_lang_filesystem::ids::SmolStrId;
 use cairo_lang_syntax::attribute::structured::AttributeListStructurize;
 use cairo_lang_syntax::node::ast;
-use cairo_lang_syntax::node::db::SyntaxGroup;
+use salsa::Database;
 
 use super::{AVAILABLE_GAS_ATTR, IGNORE_ATTR, SHOULD_PANIC_ATTR, TEST_ATTR};
 use crate::test_config::try_extract_test_config;
@@ -12,16 +13,16 @@ use crate::test_config::try_extract_test_config;
 pub struct TestPlugin;
 
 impl MacroPlugin for TestPlugin {
-    fn generate_code(
+    fn generate_code<'db>(
         &self,
-        db: &dyn SyntaxGroup,
-        item_ast: ast::ModuleItem,
+        db: &'db dyn Database,
+        item_ast: ast::ModuleItem<'db>,
         _metadata: &MacroPluginMetadata<'_>,
-    ) -> PluginResult {
+    ) -> PluginResult<'db> {
         PluginResult {
             code: None,
             diagnostics: if let ast::ModuleItem::FreeFunction(free_func_ast) = item_ast {
-                try_extract_test_config(db, free_func_ast.attributes(db).structurize(db)).err()
+                try_extract_test_config(db, &free_func_ast.attributes(db).structurize(db)).err()
             } else {
                 None
             }
@@ -30,12 +31,12 @@ impl MacroPlugin for TestPlugin {
         }
     }
 
-    fn declared_attributes(&self) -> Vec<String> {
+    fn declared_attributes<'db>(&self, db: &'db dyn Database) -> Vec<SmolStrId<'db>> {
         vec![
-            TEST_ATTR.to_string(),
-            AVAILABLE_GAS_ATTR.to_string(),
-            SHOULD_PANIC_ATTR.to_string(),
-            IGNORE_ATTR.to_string(),
+            SmolStrId::from(db, TEST_ATTR),
+            SmolStrId::from(db, AVAILABLE_GAS_ATTR),
+            SmolStrId::from(db, SHOULD_PANIC_ATTR),
+            SmolStrId::from(db, IGNORE_ATTR),
         ]
     }
 }

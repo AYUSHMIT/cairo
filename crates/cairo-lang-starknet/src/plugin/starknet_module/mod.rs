@@ -8,16 +8,15 @@ use cairo_lang_defs::plugin::{
 use cairo_lang_filesystem::db::Edition;
 use cairo_lang_plugins::plugins::HasItemsInCfgEx;
 use cairo_lang_syntax::node::ast::MaybeModuleBody;
-use cairo_lang_syntax::node::db::SyntaxGroup;
 use cairo_lang_syntax::node::helpers::{BodyItems, QueryAttrs};
-use cairo_lang_syntax::node::kind::SyntaxKind;
 use cairo_lang_syntax::node::{SyntaxNode, Terminal, TypedSyntaxNode, ast};
-use cairo_lang_utils::{extract_matches, require};
+use cairo_lang_utils::extract_matches;
+use salsa::Database;
 
 use self::component::generate_component_specific_code;
 use self::contract::generate_contract_specific_code;
 use super::events::{EMPTY_EVENT_CODE, get_starknet_event_variants};
-use crate::plugin::aux_data::StarkNetContractAuxData;
+use crate::plugin::aux_data::StarknetContractAuxData;
 use crate::plugin::consts::{
     COMPONENT_ATTR, CONTRACT_ATTR, DEPRECATED_CONTRACT_ATTR, GENERIC_CONTRACT_STATE_NAME,
     STORAGE_ATTR, STORAGE_STRUCT_NAME,
@@ -28,18 +27,18 @@ pub mod component;
 pub mod contract;
 pub mod generation_data;
 
-/// The kind of the starknet module (contract/component).
+/// The kind of the Starknet module (contract/component).
 #[derive(PartialEq, Eq, Copy, Clone)]
 pub enum StarknetModuleKind {
     Contract,
     Component,
 }
 impl StarknetModuleKind {
-    /// Returns the starknet module kind according to the module's attributes, if any.
-    fn from_module(
-        db: &dyn SyntaxGroup,
-        module_ast: &ast::ItemModule,
-    ) -> Option<(Self, ast::Attribute)> {
+    /// Returns the Starknet module kind according to the module's attributes, if any.
+    fn from_module<'db>(
+        db: &'db dyn Database,
+        module_ast: &ast::ItemModule<'db>,
+    ) -> Option<(Self, ast::Attribute<'db>)> {
         for (attr_str, kind) in [
             (CONTRACT_ATTR, StarknetModuleKind::Contract),
             (COMPONENT_ATTR, StarknetModuleKind::Component),
@@ -100,12 +99,15 @@ impl StarknetModuleKind {
 }
 
 /// Handles a contract/component module item.
-pub(super) fn handle_module(db: &dyn SyntaxGroup, module_ast: ast::ItemModule) -> PluginResult {
+pub(super) fn handle_module<'db>(
+    db: &'db dyn Database,
+    module_ast: ast::ItemModule<'db>,
+) -> PluginResult<'db> {
     if module_ast.has_attr(db, DEPRECATED_CONTRACT_ATTR) {
         return PluginResult {
             code: None,
             diagnostics: vec![PluginDiagnostic::error(
-                &module_ast,
+                module_ast.stable_ptr(db),
                 format!(
                     "The '{DEPRECATED_CONTRACT_ATTR}' attribute was deprecated, please use \
                      `{CONTRACT_ATTR}` instead.",
@@ -122,28 +124,28 @@ pub(super) fn handle_module(db: &dyn SyntaxGroup, module_ast: ast::ItemModule) -
 }
 
 /// Validates the contract/component module (has body with storage named 'Storage').
-fn validate_module(
-    db: &dyn SyntaxGroup,
-    module_ast: ast::ItemModule,
+fn validate_module<'db>(
+    db: &'db dyn Database,
+    module_ast: ast::ItemModule<'db>,
     module_kind_str: &str,
-) -> PluginResult {
+) -> PluginResult<'db> {
     let MaybeModuleBody::Some(body) = module_ast.body(db) else {
         return PluginResult {
             code: None,
             diagnostics: vec![PluginDiagnostic::error(
-                &module_ast,
+                module_ast.stable_ptr(db),
                 format!("{module_kind_str}s without body are not supported."),
             )],
             remove_original_item: false,
         };
     };
-    let Some(storage_struct_ast) = body.items_vec(db).into_iter().find(|item| {
-        matches!(item, ast::ModuleItem::Struct(struct_ast) if struct_ast.name(db).text(db) == STORAGE_STRUCT_NAME)
+    let Some(storage_struct_ast) = body.iter_items(db).find(|item| {
+        matches!(item, ast::ModuleItem::Struct(struct_ast) if struct_ast.name(db).text(db).long(db) == STORAGE_STRUCT_NAME)
     }) else {
         return PluginResult {
             code: None,
             diagnostics: vec![PluginDiagnostic::error(
-                 &module_ast,
+                 module_ast.stable_ptr(db),
                  format!("{module_kind_str}s must define a '{STORAGE_STRUCT_NAME}' struct."),
             )],
             remove_original_item: false,
@@ -154,7 +156,7 @@ fn validate_module(
         return PluginResult {
             code: None,
             diagnostics: vec![PluginDiagnostic::error(
-                &storage_struct_ast,
+                storage_struct_ast.stable_ptr(db),
                 format!("'{STORAGE_STRUCT_NAME}' struct must be annotated with #[{STORAGE_ATTR}]."),
             )],
             remove_original_item: false,
@@ -166,11 +168,11 @@ fn validate_module(
 
 /// If the module is annotated with CONTRACT_ATTR or COMPONENT_ATTR, generate the relevant
 /// contract/component logic.
-pub(super) fn handle_module_by_storage(
-    db: &dyn SyntaxGroup,
-    struct_ast: ast::ItemStruct,
+pub(super) fn handle_module_by_storage<'db>(
+    db: &'db dyn Database,
+    struct_ast: ast::ItemStruct<'db>,
     metadata: &MacroPluginMetadata<'_>,
-) -> Option<PluginResult> {
+) -> Option<PluginResult<'db>> {
     let (module_ast, module_kind, kind_attr) =
         grand_grand_parent_starknet_module(struct_ast.as_syntax_node(), db)?;
 
@@ -222,36 +224,36 @@ pub(super) fn handle_module_by_storage(
             code_mappings,
             aux_data: match module_kind {
                 StarknetModuleKind::Contract => {
-                    Some(DynGeneratedFileAuxData::new(StarkNetContractAuxData {
-                        contract_name: module_name,
+                    Some(DynGeneratedFileAuxData::new(StarknetContractAuxData {
+                        contract_name: module_name.to_string(db),
                     }))
                 }
                 StarknetModuleKind::Component => None,
             },
             diagnostics_note: Default::default(),
+            is_unhygienic: false,
         }),
         diagnostics,
         remove_original_item: backwards_compatible_storage(metadata.edition),
     })
 }
 
-/// If the grand grand parent of the given item is a starknet module, returns its kind
+/// If the great-grandparent of the given item is a Starknet module, returns its kind
 /// (contract/component) and its ast.
-fn grand_grand_parent_starknet_module(
-    item_node: SyntaxNode,
-    db: &dyn SyntaxGroup,
-) -> Option<(ast::ItemModule, StarknetModuleKind, ast::Attribute)> {
+fn grand_grand_parent_starknet_module<'db>(
+    item_node: SyntaxNode<'db>,
+    db: &'db dyn Database,
+) -> Option<(ast::ItemModule<'db>, StarknetModuleKind, ast::Attribute<'db>)> {
     // Get the containing module node. The parent is the item list, the grand parent is the module
     // body, and the grand grand parent is the module.
-    let module_node = item_node.parent()?.parent()?.parent()?;
-    require(module_node.kind(db) == SyntaxKind::ItemModule)?;
-    let module_ast = ast::ItemModule::from_syntax_node(db, module_node);
+    let module_node = item_node.grandparent(db)?.parent(db)?;
+    let module_ast = ast::ItemModule::cast(db, module_node)?;
     let (module_kind, attr) = StarknetModuleKind::from_module(db, &module_ast)?;
     Some((module_ast, module_kind, attr))
 }
 
 /// Whether the generated code should be backwards compatible with the old storage generated code.
-/// This mostly affect the visibility of the generated storage structs, as everything was public in
+/// This mostly affects the visibility of the generated storage structs, as everything was public in
 /// the old version regardless of the original visibility.
 pub fn backwards_compatible_storage(edition: Edition) -> bool {
     match edition {

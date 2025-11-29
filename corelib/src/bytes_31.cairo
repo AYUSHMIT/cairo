@@ -14,11 +14,12 @@
 //! assert!(value[0] == 0xbb);
 //! ```
 
+use crate::RangeCheck;
 #[allow(unused_imports)]
 use crate::integer::{u128_safe_divmod, u128_to_felt252};
+use crate::num::traits::CheckedSub;
 #[allow(unused_imports)]
 use crate::option::OptionTrait;
-use crate::RangeCheck;
 use crate::traits::{Into, TryInto};
 
 pub(crate) const BYTES_IN_BYTES31: usize = 31;
@@ -27,8 +28,10 @@ pub(crate) const POW_2_128: felt252 = 0x100000000000000000000000000000000;
 pub(crate) const POW_2_8: u128 = 0x100;
 
 /// Represents a 31-byte fixed-size byte type.
-#[derive(Copy, Drop)]
 pub extern type bytes31;
+
+impl bytes31Copy of Copy<bytes31>;
+impl bytes31Drop of Drop<bytes31>;
 
 pub(crate) extern fn bytes31_const<const value: felt252>() -> bytes31 nopanic;
 extern fn bytes31_try_from_felt252(value: felt252) -> Option<bytes31> implicits(RangeCheck) nopanic;
@@ -88,90 +91,37 @@ pub(crate) impl Felt252TryIntoBytes31 of TryInto<felt252, bytes31> {
 impl Bytes31Serde = crate::serde::into_felt252_based::SerdeImpl<bytes31>;
 
 pub(crate) impl U8IntoBytes31 of Into<u8, bytes31> {
-    fn into(self: u8) -> bytes31 {
-        crate::integer::upcast(self)
+    #[feature("bounded-int-utils")]
+    const fn into(self: u8) -> bytes31 {
+        crate::internal::bounded_int::upcast(self)
     }
 }
 
 impl U16IntoBytes31 of Into<u16, bytes31> {
-    fn into(self: u16) -> bytes31 {
-        crate::integer::upcast(self)
+    #[feature("bounded-int-utils")]
+    const fn into(self: u16) -> bytes31 {
+        crate::internal::bounded_int::upcast(self)
     }
 }
 
 impl U32IntoBytes31 of Into<u32, bytes31> {
-    fn into(self: u32) -> bytes31 {
-        crate::integer::upcast(self)
+    #[feature("bounded-int-utils")]
+    const fn into(self: u32) -> bytes31 {
+        crate::internal::bounded_int::upcast(self)
     }
 }
 
 impl U64IntoBytes31 of Into<u64, bytes31> {
-    fn into(self: u64) -> bytes31 {
-        crate::integer::upcast(self)
+    #[feature("bounded-int-utils")]
+    const fn into(self: u64) -> bytes31 {
+        crate::internal::bounded_int::upcast(self)
     }
 }
 
 pub(crate) impl U128IntoBytes31 of Into<u128, bytes31> {
-    fn into(self: u128) -> bytes31 {
-        crate::integer::upcast(self)
-    }
-}
-
-/// Splits a `bytes31` into two `bytes31`s at the given index (LSB's index is 0).
-/// The input `bytes31` and the output `bytes31`s are represented using `felt252`s to improve
-/// performance.
-///
-/// Note: this function assumes that:
-/// 1. `word` is validly convertible to a `bytes31`` which has no more than `len` bytes of data.
-/// 2. `index <= len`.
-/// 3. `len <= BYTES_IN_BYTES31`.
-/// If these assumptions are not met, it can corrupt the `byte31`s. Thus, this should be a
-/// private function. We could add masking/assertions but it would be more expansive.
-pub(crate) fn split_bytes31(word: felt252, len: usize, index: usize) -> (felt252, felt252) {
-    if index == 0 {
-        return (0, word);
-    }
-    if index == len {
-        return (word, 0);
-    }
-
-    let u256 { low, high } = word.into();
-
-    if index == BYTES_IN_U128 {
-        return (low.into(), high.into());
-    }
-
-    if len <= BYTES_IN_U128 {
-        let result = split_u128(low, index);
-        return (result.low.into(), result.high.into());
-    }
-
-    // len > BYTES_IN_U128
-    if index < BYTES_IN_U128 {
-        let low_result = split_u128(low, index);
-        let right = high.into() * one_shift_left_bytes_u128(BYTES_IN_U128 - index).into()
-            + low_result.high.into();
-        return (low_result.low.into(), right);
-    }
-
-    // len > BYTES_IN_U128 && index > BYTES_IN_U128
-
-    let high_result = split_u128(high, index - BYTES_IN_U128);
-    let left = high_result.low.into() * POW_2_128 + low.into();
-    return (left, high_result.high.into());
-}
-
-
-/// Returns `1 << (8 * n_bytes)` as `felt252`, assuming that `n_bytes < BYTES_IN_BYTES31`.
-///
-/// Note: if `n_bytes >= BYTES_IN_BYTES31`, the behavior is undefined. If one wants to
-/// assert that in the callsite, it's sufficient to assert that `n_bytes != BYTES_IN_BYTES31`
-/// because if `n_bytes > 31` then `n_bytes - 16 > 15` and `one_shift_left_bytes_u128` would panic.
-pub(crate) fn one_shift_left_bytes_felt252(n_bytes: usize) -> felt252 {
-    if n_bytes < BYTES_IN_U128 {
-        one_shift_left_bytes_u128(n_bytes).into()
-    } else {
-        one_shift_left_bytes_u128(n_bytes - BYTES_IN_U128).into() * POW_2_128
+    #[feature("bounded-int-utils")]
+    const fn into(self: u128) -> bytes31 {
+        crate::internal::bounded_int::upcast(self)
     }
 }
 
@@ -192,10 +142,10 @@ pub(crate) fn split_u128(value: u128, n_bytes: usize) -> u256 {
 /// Returns the `u8` at `index` if you look at `value` as an array of 32 `u8`s.
 pub(crate) fn u8_at_u256(value: u256, index: usize) -> u8 {
     get_lsb(
-        if index < BYTES_IN_U128 {
-            split_u128(value.low, index).high
+        if let Some(rev_index) = index.checked_sub(BYTES_IN_U128) {
+            split_u128(value.high, rev_index).high
         } else {
-            split_u128(value.high, index - BYTES_IN_U128).high
+            split_u128(value.low, index).high
         },
     )
 }
@@ -232,17 +182,18 @@ impl Bytes31PartialEq of PartialEq<bytes31> {
 }
 
 mod helpers {
-    use core::internal::bounded_int::{DivRemHelper, BoundedInt, div_rem};
+    #[feature("bounded-int-utils")]
+    use core::internal::bounded_int::{BoundedInt, DivRemHelper, UnitInt, div_rem, upcast};
 
-    impl DivRemU128By256 of DivRemHelper<u128, BoundedInt<256, 256>> {
+    impl DivRemU128By256 of DivRemHelper<u128, UnitInt<256>> {
         type DivT = BoundedInt<0, 0xffffffffffffffffffffffffffffff>;
         type RemT = BoundedInt<0, 0xff>;
     }
 
     /// Returns the least significant byte of the given u128.
     pub fn get_lsb(value: u128) -> u8 {
-        let (_, res) = div_rem::<_, BoundedInt<256, 256>>(value, 256);
-        core::integer::upcast(res)
+        let (_, res) = div_rem::<_, UnitInt<256>>(value, 256);
+        upcast(res)
     }
 }
 

@@ -1,3 +1,4 @@
+use cairo_lang_syntax::attribute::consts::STARKNET_INTERFACE_ATTR;
 use const_format::formatcp;
 
 pub const EXTERNAL_MODULE: &str = "__external";
@@ -25,7 +26,7 @@ pub const STORAGE_AS_POINTER_TRAIT: &str = "starknet::storage::StorageAsPointer"
 pub const STORAGE_AS_PATH_TRAIT: &str = "starknet::storage::StorageAsPath";
 pub const STORAGE_NODE_ATTR: &str = "starknet::storage_node";
 pub const STORAGE_SUB_POINTERS_ATTR: &str = "starknet::sub_pointers";
-pub const INTERFACE_ATTR: &str = "starknet::interface";
+pub const INTERFACE_ATTR: &str = STARKNET_INTERFACE_ATTR;
 pub(super) const DEPRECATED_CONTRACT_ATTR: &str = "contract";
 pub const CONTRACT_ATTR: &str = "starknet::contract";
 pub const CONTRACT_ATTR_ACCOUNT_ARG: &str = "account";
@@ -46,6 +47,7 @@ pub const NESTED_ATTR: &str = "nested";
 pub const FLAT_ATTR: &str = "flat";
 pub const KEY_ATTR: &str = "key";
 pub const SERDE_ATTR: &str = "serde";
+pub const DISPATCHER_DOC_GROUP_ATTR: &str = "#[doc(group: \"dispatchers\")]";
 
 pub const VALIDATE_ENTRY_POINT_SELECTOR: &str = "__validate__";
 pub const EXECUTE_ENTRY_POINT_SELECTOR: &str = "__execute__";

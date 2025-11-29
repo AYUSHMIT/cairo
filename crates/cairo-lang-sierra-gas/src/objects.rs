@@ -1,10 +1,10 @@
 use cairo_lang_sierra::extensions::circuit::CircuitInfo;
-use cairo_lang_sierra::extensions::gas::{BuiltinCostsType, CostTokenType};
+use cairo_lang_sierra::extensions::gas::{BuiltinCostsType, CostTokenMap, CostTokenType};
 use cairo_lang_sierra::ids::ConcreteTypeId;
-use cairo_lang_sierra::program::Function;
 use cairo_lang_utils::casts::IntoOrPanic;
-use cairo_lang_utils::collection_arithmetics::{add_maps, sub_maps};
-use cairo_lang_utils::ordered_hash_map::OrderedHashMap;
+use cairo_lang_utils::collection_arithmetics::{AddCollection, SubCollection};
+
+use crate::core_libfunc_cost_base::FunctionCostInfo;
 
 /// Represents constant cost.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -66,14 +66,14 @@ impl std::ops::Sub for ConstCost {
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub struct PreCost(pub OrderedHashMap<CostTokenType, i32>);
+pub struct PreCost(pub CostTokenMap<i32>);
 impl PreCost {
     pub fn builtin(token_type: CostTokenType) -> Self {
-        Self(OrderedHashMap::from_iter([(token_type, 1)]))
+        Self(CostTokenMap::from_iter([(token_type, 1)]))
     }
 
     pub fn n_builtins(token_type: CostTokenType, n: i32) -> Self {
-        Self(OrderedHashMap::from_iter([(token_type, n)]))
+        Self(CostTokenMap::from_iter([(token_type, n)]))
     }
 }
 
@@ -82,7 +82,7 @@ impl std::ops::Add for PreCost {
     type Output = Self;
 
     fn add(self, rhs: Self) -> Self::Output {
-        PreCost(add_maps(self.0, rhs.0))
+        PreCost(self.0.add_collection(rhs.0))
     }
 }
 
@@ -91,7 +91,7 @@ impl std::ops::Sub for PreCost {
     type Output = Self;
 
     fn sub(self, rhs: Self) -> Self::Output {
-        PreCost(sub_maps(self.0, rhs.0))
+        PreCost(self.0.sub_collection(rhs.0))
     }
 }
 
@@ -111,7 +111,7 @@ pub enum BranchCost {
     /// A cost of a function.
     /// `sign` controls whether the cost (the function cost as well as `const_cost`) is added
     /// to or reduced from the wallet.
-    FunctionCost { const_cost: ConstCost, function: Function, sign: BranchCostSign },
+    FunctionCost { const_cost: ConstCost, function: FunctionCostInfo, sign: BranchCostSign },
     /// The cost of the `branch_align` libfunc.
     BranchAlign,
     /// The cost of `withdraw_gas` and `withdraw_gas_all` libfuncs.
@@ -139,7 +139,7 @@ impl WithdrawGasBranchInfo {
             BuiltinCostsType::cost_computation_steps(self.with_builtin_costs, token_usages)
                 .into_or_panic();
         let mut steps = 3 + cost_computation;
-        // Failure branch have some additional costs.
+        // Failure branch has some additional costs.
         if !self.success {
             if self.with_builtin_costs || cost_computation > 0 {
                 // The additional jump to failure branch, and an additional minus 1 for the

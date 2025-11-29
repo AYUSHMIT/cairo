@@ -9,26 +9,30 @@ extern crate alloc;
 use alloc::boxed::Box;
 use core::fmt;
 
+/// Re-exporting the [`smol_str`] crate so that downstream projects can always use the same
+/// instance the compiler does.
+pub use ::smol_str;
+
 pub mod bigint;
 pub mod byte_array;
 pub mod casts;
 pub mod collection_arithmetics;
+pub mod deque;
 pub mod extract_matches;
 #[cfg(feature = "std")]
 pub mod graph_algos;
 pub mod iterators;
-#[cfg(feature = "env_logger")]
+#[cfg(feature = "tracing")]
 pub mod logging;
 pub mod ordered_hash_map;
 pub mod ordered_hash_set;
+#[cfg(feature = "std")]
+pub mod small_ordered_map;
 pub mod unordered_hash_map;
 pub mod unordered_hash_set;
 
 /// Similar to From / TryFrom, but returns an option.
-pub trait OptionFrom<T>
-where
-    Self: Sized,
-{
+pub trait OptionFrom<T>: Sized {
     fn option_from(other: T) -> Option<Self>;
 }
 
@@ -82,14 +86,12 @@ pub fn borrow_as_box<T: Default, R, F: FnOnce(Box<T>) -> (R, Box<T>)>(ptr: &mut 
     res
 }
 
-/// A trait for the `lookup_intern` method for short IDs (returning the long ID).
-pub trait LookupIntern<'a, DynDbGroup: ?Sized, LongId> {
-    fn lookup_intern(&self, db: &(impl Upcast<DynDbGroup> + ?Sized)) -> LongId;
-}
-pub trait Intern<'a, DynDbGroup: ?Sized, ShortId> {
-    fn intern(self, db: &(impl Upcast<DynDbGroup> + ?Sized)) -> ShortId;
+#[cfg(feature = "std")]
+pub trait Intern<'db, Target> {
+    fn intern(self, db: &'db dyn salsa::Database) -> Target;
 }
 
+/// TODO(eytan-starkware): Remove this macro entirely and rely on `salsa::interned`.
 // Defines a short id struct for use with salsa interning.
 // Interning is the process of representing a value as an id in a table.
 // We usually denote the value type as "long id", and the id type as "short id" or just "id".
@@ -100,71 +102,50 @@ pub trait Intern<'a, DynDbGroup: ?Sized, ShortId> {
 //   usually include the short id of the entity's parent.
 #[macro_export]
 macro_rules! define_short_id {
-    ($short_id:ident, $long_id:path, $db:ident, $lookup:ident, $intern:ident) => {
-        #[derive(Copy, Clone, Debug, Hash, PartialEq, Eq)]
-        pub struct $short_id(salsa::InternId);
-        impl<'a> cairo_lang_utils::LookupIntern<'a, dyn $db + 'a, $long_id> for $short_id {
-            fn lookup_intern(
-                &self,
-                db: &(impl cairo_lang_utils::Upcast<dyn $db + 'a> + ?Sized),
-            ) -> $long_id {
-                $db::$lookup(db.upcast(), *self)
+    ($short_id:ident, $long_id:path) => {
+        // 1. Modern interned struct.
+        #[salsa::interned(revisions = usize::MAX)]
+        pub struct $short_id<'db> {
+            #[returns(ref)]
+            pub long: $long_id,
+        }
+
+        impl<'db> std::fmt::Debug for $short_id<'db> {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, "{}({:x})", stringify!($short_id), self.as_intern_id().index())
             }
         }
-        impl<'a> cairo_lang_utils::Intern<'a, dyn $db + 'a, $short_id> for $long_id {
-            fn intern(
-                self,
-                db: &(impl cairo_lang_utils::Upcast<dyn $db + 'a> + ?Sized),
-            ) -> $short_id {
-                $db::$intern(db.upcast(), self)
+
+        impl<'db> cairo_lang_utils::Intern<'db, $short_id<'db>> for $long_id {
+            fn intern(self, db: &'db dyn salsa::Database) -> $short_id<'db> {
+                $short_id::new(db, self)
             }
         }
-        impl salsa::InternKey for $short_id {
-            fn from_intern_id(salsa_id: salsa::InternId) -> Self {
-                Self(salsa_id)
+
+        impl<'db> $short_id<'db> {
+            pub fn from_intern_id(intern_id: salsa::Id) -> Self {
+                use salsa::plumbing::FromId;
+                Self::from_id(intern_id)
             }
 
-            fn as_intern_id(&self) -> salsa::InternId {
-                self.0
+            pub fn as_intern_id(self) -> salsa::Id {
+                use salsa::plumbing::AsId;
+                self.as_id()
             }
         }
-        // Impl transparent DebugWithDb.
-        impl<T: ?Sized + cairo_lang_utils::Upcast<dyn $db + 'static>>
-            cairo_lang_debug::DebugWithDb<T> for $short_id
-        {
-            fn fmt(&self, f: &mut std::fmt::Formatter<'_>, db: &T) -> std::fmt::Result {
+
+        // 4. DebugWithDb identical to old macro.
+        impl<'db> cairo_lang_debug::DebugWithDb<'db> for $short_id<'db> {
+            type Db = dyn salsa::Database;
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>, db: &'db Self::Db) -> std::fmt::Result {
                 use core::fmt::Debug;
 
-                use cairo_lang_debug::helper::Fallback;
-                let db = db.upcast();
-                cairo_lang_debug::helper::HelperDebug::<$long_id, dyn $db>::helper_debug(
-                    &db.$lookup(*self),
-                    db,
-                )
-                .fmt(f)
+                use cairo_lang_debug::helper::{Fallback, HelperDebug};
+
+                HelperDebug::<$long_id, dyn salsa::Database>::helper_debug(self.long(db), db).fmt(f)
             }
         }
     };
-}
-
-pub trait Upcast<T: ?Sized> {
-    fn upcast(&self) -> &T;
-}
-
-impl<T: ?Sized> Upcast<T> for T {
-    fn upcast(&self) -> &T {
-        self
-    }
-}
-
-pub trait UpcastMut<T: ?Sized> {
-    fn upcast_mut(&mut self) -> &mut T;
-}
-
-impl<T: ?Sized> UpcastMut<T> for T {
-    fn upcast_mut(&mut self) -> &mut T {
-        self
-    }
 }
 
 /// Returns `Some(())` if the condition is true, otherwise `None`.

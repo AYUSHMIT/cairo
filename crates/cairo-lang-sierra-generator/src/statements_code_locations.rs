@@ -5,11 +5,11 @@ use cairo_lang_sierra::program::StatementIdx;
 use cairo_lang_utils::ordered_hash_map::OrderedHashMap;
 use serde::{Deserialize, Serialize};
 
-/// A full path to a cairo source file.
+/// A full path to a Cairo source file.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct SourceFileFullPath(pub String);
 
-/// A location in a cairo source file.
+/// A location in a Cairo source file.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct SourceCodeLocation {
     /// Line index, 0 based.
@@ -18,24 +18,25 @@ pub struct SourceCodeLocation {
     pub col: usize,
 }
 
-/// A location in a cairo source file.
+/// A location in a Cairo source file.
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct SourceCodeSpan {
-    /// Beginning of the text span in the cairo source file.
+    /// Beginning of the text span in the Cairo source file.
     pub start: SourceCodeLocation,
-    /// End of the text span in the cairo source file, not included.
+    /// End of the text span in the Cairo source file, not included.
     pub end: SourceCodeLocation,
 }
 
-/// The mapping between sierra statement indexes and locations in cairo code
-/// (if obtainable) which caused the statement to be generated.
+/// The mapping between Sierra statement indexes and locations in Cairo code
+/// (if obtainable) which caused the statement to be generated. Contains the additional information
+/// if the location is a part of a macro expansion.
 ///
 /// Should be created using
 /// [`crate::statements_locations::StatementsLocations::extract_statements_source_code_locations`].
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
 pub struct StatementsSourceCodeLocations {
     pub statements_to_code_location_map:
-        HashMap<StatementIdx, Vec<(SourceFileFullPath, SourceCodeSpan)>>,
+        HashMap<StatementIdx, Vec<(SourceFileFullPath, SourceCodeSpan, bool)>>,
 }
 
 impl From<StatementsSourceCodeLocations> for Annotations {

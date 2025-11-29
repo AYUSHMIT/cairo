@@ -2,14 +2,14 @@
 use std::collections::hash_map::RandomState as HashBuilderType;
 
 #[cfg(not(feature = "std"))]
-use hashbrown::hash_map::DefaultHashBuilder as HashBuilderType;
-use test_log::test;
+use hashbrown::DefaultHashBuilder as HashBuilderType;
 
-use crate::collection_arithmetics::{add_maps, sub_maps};
+use crate::collection_arithmetics::{AddCollection, SubCollection};
 use crate::ordered_hash_map::OrderedHashMap;
 
 #[test]
 fn test_add_map_and_sub_map() {
+    crate::logging::init_logging(crate::logging::level::ERROR);
     let x = OrderedHashMap::<i64, i64, HashBuilderType>::from_iter([
         (10, 3),
         (20, 7),
@@ -24,11 +24,11 @@ fn test_add_map_and_sub_map() {
     ]);
 
     assert_eq!(
-        add_maps(x.clone(), y.iter().map(|(k, v)| (*k, *v))),
+        x.clone().add_collection(y.iter().map(|(k, v)| (*k, *v))),
         OrderedHashMap::<i64, i64, HashBuilderType>::from_iter([(10, 8), (20, 7), (0, 2), (40, 6)])
     );
     assert_eq!(
-        sub_maps(x, y),
+        x.sub_collection(y),
         OrderedHashMap::<i64, i64, HashBuilderType>::from_iter([
             (10, -2),
             (20, 7),

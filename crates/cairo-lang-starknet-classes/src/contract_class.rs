@@ -81,7 +81,7 @@ impl ContractClass {
     }
 
     /// Checks that all the used libfuncs in the contract class are allowed in the contract class
-    /// sierra version.
+    /// Sierra version.
     pub fn validate_version_compatible(
         self: &ContractClass,
         list_selector: ListSelector,
@@ -90,7 +90,7 @@ impl ContractClass {
         let allowed_libfuncs = lookup_allowed_libfuncs_list(list_selector)?;
         let (_, _, sierra_program) = sierra_from_felt252s(&self.sierra_program)
             .map_err(|_| AllowedLibfuncsError::SierraProgramError)?;
-        for libfunc in sierra_program.libfunc_declarations.iter() {
+        for libfunc in &sierra_program.libfunc_declarations {
             if !allowed_libfuncs.allowed_libfuncs.contains(&libfunc.long_id.generic_id) {
                 return Err(AllowedLibfuncsError::UnsupportedLibfunc {
                     invalid_libfunc: libfunc.long_id.generic_id.to_string(),
@@ -119,7 +119,7 @@ pub struct ContractEntryPoint {
     /// A field element that encodes the signature of the called function.
     #[serde(serialize_with = "serialize_big_uint", deserialize_with = "deserialize_big_uint")]
     pub selector: BigUint,
-    /// The idx of the user function declaration in the sierra program.
+    /// The index of the user function declaration in the Sierra program.
     pub function_idx: usize,
 }
 

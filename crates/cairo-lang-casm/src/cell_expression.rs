@@ -24,7 +24,7 @@ impl core::fmt::Display for CellOperator {
     }
 }
 
-/// The expression representing a cell in the casm memory.
+/// The expression representing a cell in the CASM memory.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum CellExpression {
     Deref(CellRef),
@@ -135,7 +135,7 @@ impl core::fmt::Display for CellExpression {
         match self {
             CellExpression::Deref(cell) => write!(f, "{cell}"),
             CellExpression::DoubleDeref(cell, offset) => write!(f, "[{cell} + {offset}]"),
-            CellExpression::Immediate(imm) => write!(f, "{}", imm),
+            CellExpression::Immediate(imm) => write!(f, "{imm}"),
             CellExpression::BinOp { op, a, b } => write!(f, "{a} {op} {b}"),
         }
     }

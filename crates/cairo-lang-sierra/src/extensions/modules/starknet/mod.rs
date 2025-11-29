@@ -26,7 +26,9 @@ pub mod secp256r1;
 pub mod testing;
 
 pub mod interoperability;
-use interoperability::{CallContractLibfunc, ContractAddressConstLibfunc, ContractAddressType};
+use interoperability::{
+    CallContractLibfunc, ContractAddressConstLibfunc, ContractAddressType, MetaTxV0Libfunc,
+};
 
 use self::getter::{GetExecutionInfoTrait, GetExecutionInfoV2Trait, GetterLibfunc};
 use self::interoperability::{
@@ -51,7 +53,7 @@ use super::structure::StructType;
 use super::try_from_felt252::TryFromFelt252Libfunc;
 
 define_type_hierarchy! {
-    pub enum StarkNetType {
+    pub enum StarknetType {
         ClassHash(ClassHashType),
         ContractAddress(ContractAddressType),
         StorageBaseAddress(StorageBaseAddressType),
@@ -59,11 +61,11 @@ define_type_hierarchy! {
         System(SystemType),
         Secp256Point(Secp256PointType),
         Sha256StateHandle(Sha256StateHandleType),
-    }, StarkNetTypeConcrete
+    }, StarknetTypeConcrete
 }
 
 define_libfunc_hierarchy! {
-    pub enum StarkNetLibfunc {
+    pub enum StarknetLibfunc {
          CallContract(CallContractLibfunc),
          ClassHashConst(ClassHashConstLibfunc),
          ClassHashTryFromFelt252(TryFromFelt252Libfunc<ClassHashTryFromFelt252Trait>),
@@ -92,9 +94,10 @@ define_libfunc_hierarchy! {
          ReplaceClass(ReplaceClassLibfunc),
          GetClassHashAt(GetClassHashAtLibfunc),
          SendMessageToL1(SendMessageToL1Libfunc),
+         MetaTxV0(MetaTxV0Libfunc),
          Testing(TestingLibfunc),
          Secp256(Secp256Libfunc),
-    }, StarkNetConcreteLibfunc
+    }, StarknetConcreteLibfunc
 }
 
 /// User type for `Span<T>`.
@@ -103,15 +106,18 @@ fn span_ty(
     wrapped_ty: ConcreteTypeId,
     wrapped_ty_name: &str,
 ) -> Result<ConcreteTypeId, SpecializationError> {
-    context.get_concrete_type(StructType::id(), &[
-        GenericArg::UserType(UserTypeId::from_string(format!(
-            "core::array::Span::<{wrapped_ty_name}>"
-        ))),
-        GenericArg::Type(snapshot_ty(
-            context,
-            context.get_wrapped_concrete_type(ArrayType::id(), wrapped_ty)?,
-        )?),
-    ])
+    context.get_concrete_type(
+        StructType::id(),
+        &[
+            GenericArg::UserType(UserTypeId::from_string(format!(
+                "core::array::Span::<{wrapped_ty_name}>"
+            ))),
+            GenericArg::Type(snapshot_ty(
+                context,
+                context.get_wrapped_concrete_type(ArrayType::id(), wrapped_ty)?,
+            )?),
+        ],
+    )
 }
 
 /// User type for `Span<felt252>`.

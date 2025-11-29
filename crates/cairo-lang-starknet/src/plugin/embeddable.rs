@@ -1,11 +1,11 @@
 use cairo_lang_defs::patcher::{PatchBuilder, RewriteNode};
 use cairo_lang_defs::plugin::{PluginDiagnostic, PluginGeneratedFile, PluginResult};
-use cairo_lang_syntax::node::db::SyntaxGroup;
 use cairo_lang_syntax::node::helpers::{BodyItems, GenericParamEx};
-use cairo_lang_syntax::node::{Terminal, TypedStablePtr, TypedSyntaxNode, ast};
+use cairo_lang_syntax::node::{Terminal, TypedSyntaxNode, ast};
 use cairo_lang_utils::try_extract_matches;
 use indoc::formatdoc;
 use itertools::chain;
+use salsa::Database;
 
 use super::consts::{
     CONSTRUCTOR_MODULE, EXTERNAL_MODULE, GENERIC_CONTRACT_STATE_NAME, L1_HANDLER_MODULE,
@@ -16,12 +16,15 @@ use super::entry_point::{
 use super::utils::{GenericParamExtract, forbid_attributes_in_impl};
 
 /// Handles an embeddable impl, generating entry point wrappers and modules pointing to them.
-pub fn handle_embeddable(db: &dyn SyntaxGroup, item_impl: ast::ItemImpl) -> PluginResult {
+pub fn handle_embeddable<'db>(
+    db: &'db dyn Database,
+    item_impl: ast::ItemImpl<'db>,
+) -> PluginResult<'db> {
     let ast::MaybeImplBody::Some(body) = item_impl.body(db) else {
         return PluginResult {
             code: None,
             diagnostics: vec![PluginDiagnostic::error(
-                item_impl.stable_ptr().untyped(),
+                item_impl.stable_ptr(db),
                 "Making empty impls embeddable is disallowed.".to_string(),
             )],
             remove_original_item: false,
@@ -30,7 +33,7 @@ pub fn handle_embeddable(db: &dyn SyntaxGroup, item_impl: ast::ItemImpl) -> Plug
     let mut diagnostics = vec![];
     let generic_params = item_impl.generic_params(db);
     let impl_name = item_impl.name(db);
-    let impl_name_str = impl_name.text(db);
+    let impl_name_str = impl_name.text(db).long(db);
     let impl_name = RewriteNode::from_ast_trimmed(&impl_name);
     let (is_valid_params, maybe_generic_args, generic_params_node) = match &generic_params {
         ast::OptionWrappedGenericParamList::Empty(_) => {
@@ -38,7 +41,7 @@ pub fn handle_embeddable(db: &dyn SyntaxGroup, item_impl: ast::ItemImpl) -> Plug
         }
         ast::OptionWrappedGenericParamList::WrappedGenericParamList(params) => {
             let generic_params_node = params.generic_params(db);
-            let elements = generic_params_node.elements(db);
+            let elements = generic_params_node.elements_vec(db);
             let has_drop_impl = elements
                 .iter()
                 .any(|param| param.is_impl_of(db, "Drop", GENERIC_CONTRACT_STATE_NAME));
@@ -47,7 +50,7 @@ pub fn handle_embeddable(db: &dyn SyntaxGroup, item_impl: ast::ItemImpl) -> Plug
                     || param.is_impl_of(db, "PanicDestruct", GENERIC_CONTRACT_STATE_NAME)
                 {
                     diagnostics.push(PluginDiagnostic::error(
-                        param.stable_ptr().untyped(),
+                        param.stable_ptr(db),
                         format!(
                             "`embeddable` impls can't have impl generic parameters of \
                              `Destruct<{GENERIC_CONTRACT_STATE_NAME}>` or \
@@ -60,7 +63,9 @@ pub fn handle_embeddable(db: &dyn SyntaxGroup, item_impl: ast::ItemImpl) -> Plug
             let first_generic_param = elements.next();
             let is_valid_params = first_generic_param
                 .and_then(|param| try_extract_matches!(param, ast::GenericParam::Type))
-                .is_some_and(|param| param.name(db).text(db) == GENERIC_CONTRACT_STATE_NAME);
+                .is_some_and(|param| {
+                    param.name(db).text(db).long(db) == GENERIC_CONTRACT_STATE_NAME
+                });
             let generic_args = RewriteNode::interspersed(
                 chain!(
                     [RewriteNode::text(GENERIC_CONTRACT_STATE_NAME)],
@@ -103,7 +108,7 @@ pub fn handle_embeddable(db: &dyn SyntaxGroup, item_impl: ast::ItemImpl) -> Plug
     };
     if !is_valid_params {
         diagnostics.push(PluginDiagnostic::error(
-            generic_params.stable_ptr().untyped(),
+            generic_params.stable_ptr(db),
             format!(
                 "First generic parameter of an embeddable impl should be \
                  `{GENERIC_CONTRACT_STATE_NAME}`."
@@ -112,14 +117,14 @@ pub fn handle_embeddable(db: &dyn SyntaxGroup, item_impl: ast::ItemImpl) -> Plug
         return PluginResult { code: None, diagnostics, remove_original_item: false };
     };
     let mut data = EntryPointsGenerationData::default();
-    for item in body.items_vec(db) {
+    for item in body.iter_items(db) {
         // TODO(yuval): do the same in embeddable_As, to get a better diagnostic.
         forbid_attributes_in_impl(db, &mut diagnostics, &item, "#[embeddable]");
         let ast::ImplItem::Function(item_function) = item else {
             continue;
         };
         let function_name = item_function.declaration(db).name(db);
-        let function_name_str = function_name.text(db);
+        let function_name_str = function_name.text(db).long(db);
         let function_name = RewriteNode::from_ast_trimmed(&function_name);
         let function_path = RewriteNode::interpolate_patched(
             "$impl_name$$maybe_generic_args$::$func_name$",
@@ -167,11 +172,14 @@ pub fn handle_embeddable(db: &dyn SyntaxGroup, item_impl: ast::ItemImpl) -> Plug
         "
         ),
         &[
-            ("visibility".to_string(), RewriteNode::Trimmed {
-                node: item_impl.visibility(db).as_syntax_node(),
-                trim_left: true,
-                trim_right: false,
-            }),
+            (
+                "visibility".to_string(),
+                RewriteNode::Trimmed {
+                    node: item_impl.visibility(db).as_syntax_node(),
+                    trim_left: true,
+                    trim_right: false,
+                },
+            ),
             ("impl_name".to_string(), impl_name),
             (
                 "generated_wrapper_functions".to_string(),
@@ -200,6 +208,7 @@ pub fn handle_embeddable(db: &dyn SyntaxGroup, item_impl: ast::ItemImpl) -> Plug
             code_mappings,
             aux_data: None,
             diagnostics_note: Default::default(),
+            is_unhygienic: false,
         }),
         diagnostics,
         remove_original_item: false,

@@ -1,20 +1,21 @@
 use cairo_lang_defs::db::get_all_path_leaves;
 use cairo_lang_defs::plugin::PluginDiagnostic;
+use cairo_lang_filesystem::ids::SmolStrId;
 use cairo_lang_starknet_classes::abi::EventFieldKind;
-use cairo_lang_syntax::node::db::SyntaxGroup;
 use cairo_lang_syntax::node::helpers::{GetIdentifier, QueryAttrs};
 use cairo_lang_syntax::node::{Terminal, TypedStablePtr, TypedSyntaxNode, ast};
 use const_format::formatcp;
-use smol_str::SmolStr;
+use salsa::Database;
+use serde::{Deserialize, Serialize};
 
 use super::consts::{EVENT_ATTR, EVENT_TRAIT, EVENT_TYPE_NAME};
 use super::starknet_module::StarknetModuleKind;
 
 /// Generated auxiliary data for the `#[derive(starknet::Event)]` attribute.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Hash)]
 pub enum EventData {
-    Struct { members: Vec<(SmolStr, EventFieldKind)> },
-    Enum { variants: Vec<(SmolStr, EventFieldKind)> },
+    Struct { members: Vec<(String, EventFieldKind)> },
+    Enum { variants: Vec<(String, EventFieldKind)> },
 }
 
 /// The code for an empty event.
@@ -24,33 +25,33 @@ pub const EMPTY_EVENT_CODE: &str = formatcp! {"\
 pub enum {EVENT_TYPE_NAME} {{}}
 "};
 
-/// Checks whether the given item is a starknet event, and if so - makes sure it's valid and returns
-/// its variants. Returns None if it's not a starknet event.
-pub fn get_starknet_event_variants(
-    db: &dyn SyntaxGroup,
-    diagnostics: &mut Vec<PluginDiagnostic>,
-    item: &ast::ModuleItem,
+/// Checks whether the given item is a Starknet event and, if so, ensures it's valid and returns
+/// its variants. Returns `None` if it's not a Starknet event.
+pub fn get_starknet_event_variants<'db>(
+    db: &'db dyn Database,
+    diagnostics: &mut Vec<PluginDiagnostic<'db>>,
+    item: &ast::ModuleItem<'db>,
     module_kind: StarknetModuleKind,
-) -> Option<Vec<SmolStr>> {
+) -> Option<Vec<SmolStrId<'db>>> {
     let (has_event_name, stable_ptr, variants) = match item {
         ast::ModuleItem::Struct(strct) => (
-            strct.name(db).text(db) == EVENT_TYPE_NAME,
-            strct.name(db).stable_ptr().untyped(),
+            strct.name(db).text(db).long(db) == EVENT_TYPE_NAME,
+            strct.name(db).stable_ptr(db),
             vec![],
         ),
         ast::ModuleItem::Enum(enm) => {
-            let has_event_name = enm.name(db).text(db) == EVENT_TYPE_NAME;
+            let has_event_name = enm.name(db).text(db).long(db) == EVENT_TYPE_NAME;
             let variants = if has_event_name {
-                enm.variants(db).elements(db).into_iter().map(|v| v.name(db).text(db)).collect()
+                enm.variants(db).elements(db).map(|v| v.name(db).text(db)).collect()
             } else {
                 vec![]
             };
-            (has_event_name, enm.name(db).stable_ptr().untyped(), variants)
+            (has_event_name, enm.name(db).stable_ptr(db), variants)
         }
         ast::ModuleItem::Use(item) => {
             for leaf in get_all_path_leaves(db, item) {
-                let stable_ptr = &leaf.stable_ptr();
-                if stable_ptr.identifier(db) == EVENT_TYPE_NAME {
+                let stable_ptr = &leaf.stable_ptr(db);
+                if stable_ptr.identifier(db).long(db) == EVENT_TYPE_NAME {
                     if !item.has_attr(db, EVENT_ATTR) {
                         diagnostics.push(PluginDiagnostic::error(
                             stable_ptr.untyped(),
@@ -91,7 +92,7 @@ pub fn get_starknet_event_variants(
                     module_kind.to_str_capital()
                 ),
             ));
-            // The attribute is missing, but this counts as a event - we can't create another
+            // The attribute is missing, but this counts as an event - we can't create another
             // (empty) event.
             Some(variants)
         }

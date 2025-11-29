@@ -15,7 +15,7 @@ foo
 //! > module_code
 
 //! > expected_diagnostics
-error: Missing token TerminalSemicolon.
+error: Missing token ';'.
  --> lib.cairo:2:18
     let mut x = 3
                  ^
@@ -38,7 +38,7 @@ foo
 //! > module_code
 
 //! > expected_diagnostics
-error: Missing token TerminalSemicolon.
+error: Missing token ';'.
  --> lib.cairo:2:19
     let mut _x = 3
                   ^
@@ -64,7 +64,7 @@ foo
 //! > module_code
 
 //! > expected_diagnostics
-error: Missing token TerminalSemicolon.
+error: Missing token ';'.
  --> lib.cairo:3:17
         return 1
                 ^
@@ -87,7 +87,7 @@ foo
 //! > module_code
 
 //! > expected_diagnostics
-error: Missing token TerminalSemicolon.
+error: Missing token ';'.
  --> lib.cairo:2:13
     return 1
             ^
@@ -141,13 +141,13 @@ foo
 //! > Blocks, `if`s, and `match`s, don't require semicolon, even not in tail expressions.
 
 //! > test_runner_name
-test_function_diagnostics(expect_diagnostics: true)
+test_function_diagnostics(expect_diagnostics: false)
 
 //! > function
 fn foo() {
     // `if` without ';' in the end
     if true {}
-    let opt = Option::Some(3);
+    let opt = Some(3);
     // `match` without ';' in the end
     match opt {
         Some(_) => {},
@@ -165,15 +165,6 @@ foo
 //! > module_code
 
 //! > expected_diagnostics
-error: Identifier not found.
- --> lib.cairo:7:9
-        Some(_) => {},
-        ^**^
-
-error: Identifier not found.
- --> lib.cairo:8:9
-        None(_) => {},
-        ^**^
 
 //! > ==========================================================================
 
@@ -199,9 +190,43 @@ foo
 error: Unknown statement attribute.
  --> lib.cairo:2:5
     #[unknown_attr1]
-    ^**************^
+    ^^^^^^^^^^^^^^^^
 
 error: Unknown statement attribute.
  --> lib.cairo:3:5
     #[unknown_attr2]
-    ^**************^
+    ^^^^^^^^^^^^^^^^
+
+//! > ==========================================================================
+
+//! > Test attributes on statement lists.
+
+//! > test_runner_name
+test_function_diagnostics(expect_diagnostics: false)
+
+//! > function
+fn foo() {
+    let _x = {
+        #[feature("testing")]
+        unstable_function_with_note() // Tail expression has attributes.
+    };
+
+    #[feature("testing")]
+    unstable_function_with_note(); // Non-tail statements have attributes.
+
+    #[feature("testing")]
+    unstable_function_with_note(); // Attr on non-expression tail works.
+}
+
+//! > function_name
+foo
+
+//! > module_code
+#[unstable(feature: "testing", note: "Some reason", since: "1.0.0")]
+fn unstable_function_with_note() -> felt252 {
+    0
+}
+
+//! > function_body
+
+//! > expected_diagnostics

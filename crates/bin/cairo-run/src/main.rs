@@ -1,13 +1,14 @@
 //! Compiles and runs a Cairo program.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
-use anyhow::{Context, Ok};
+use anyhow::Context;
 use cairo_lang_compiler::db::RootDatabase;
 use cairo_lang_compiler::diagnostics::DiagnosticsReporter;
 use cairo_lang_compiler::project::{check_compiler_path, setup_project};
 use cairo_lang_diagnostics::ToOption;
+use cairo_lang_filesystem::cfg::{Cfg, CfgSet};
+use cairo_lang_filesystem::ids::CrateInput;
 use cairo_lang_runner::casm_run::format_next_item;
 use cairo_lang_runner::profiling::ProfilingInfoProcessor;
 use cairo_lang_runner::{ProfilingInfoCollectionConfig, SierraCasmRunner, StarknetState};
@@ -15,13 +16,16 @@ use cairo_lang_sierra_generator::db::SierraGenGroup;
 use cairo_lang_sierra_generator::program_generator::SierraProgramWithDebug;
 use cairo_lang_sierra_generator::replace_ids::{DebugReplacer, SierraIdReplacer};
 use cairo_lang_starknet::contract::{find_contracts, get_contracts_info};
-use cairo_lang_utils::Upcast;
 use clap::Parser;
+
+#[cfg(feature = "mimalloc")]
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 /// Compiles a Cairo project and runs the function `main`.
 /// Exits with 1 if the compilation or run fails, otherwise 0.
 #[derive(Parser, Debug)]
-#[clap(version, verbatim_doc_comment)]
+#[command(version, verbatim_doc_comment)]
 struct Args {
     /// The Cairo project path to compile and run.
     path: PathBuf,
@@ -51,13 +55,15 @@ fn main() -> anyhow::Result<()> {
     let mut db_builder = RootDatabase::builder();
     db_builder.detect_corelib();
     if args.available_gas.is_none() {
-        db_builder.skip_auto_withdraw_gas();
+        db_builder
+            .skip_auto_withdraw_gas()
+            .with_cfg(CfgSet::from_iter([Cfg::kv("gas", "disabled")]));
     }
     let db = &mut db_builder.build()?;
 
-    let main_crate_ids = setup_project(db, Path::new(&args.path))?;
+    let main_crate_inputs = setup_project(db, Path::new(&args.path))?;
 
-    let mut reporter = DiagnosticsReporter::stderr();
+    let mut reporter = DiagnosticsReporter::stderr().with_crates(&main_crate_inputs);
     if args.allow_warnings {
         reporter = reporter.allow_warnings();
     }
@@ -65,18 +71,19 @@ fn main() -> anyhow::Result<()> {
         anyhow::bail!("failed to compile: {}", args.path.display());
     }
 
-    let SierraProgramWithDebug { program: mut sierra_program, debug_info } = Arc::unwrap_or_clone(
-        db.get_sierra_program(main_crate_ids.clone())
-            .to_option()
-            .with_context(|| "Compilation failed without any diagnostics.")?,
-    );
+    let main_crate_ids = CrateInput::into_crate_ids(db, main_crate_inputs);
+    let SierraProgramWithDebug { program: mut sierra_program, debug_info } = db
+        .get_sierra_program(main_crate_ids.clone())
+        .to_option()
+        .context("Compilation failed without any diagnostics.")?
+        .clone();
     let replacer = DebugReplacer { db };
     replacer.enrich_function_names(&mut sierra_program);
     if args.available_gas.is_none() && sierra_program.requires_gas_counter() {
         anyhow::bail!("Program requires gas counter, please provide `--available-gas` argument.");
     }
 
-    let contracts = find_contracts((*db).upcast(), &main_crate_ids);
+    let contracts = find_contracts(db, &main_crate_ids);
     let contracts_info = get_contracts_info(db, contracts, &replacer)?;
     let sierra_program = replacer.apply(&sierra_program);
 
@@ -97,16 +104,16 @@ fn main() -> anyhow::Result<()> {
         .with_context(|| "Failed to run the function.")?;
 
     if args.run_profiler {
-        let profiling_info_processor = ProfilingInfoProcessor::new(
-            Some(db),
-            sierra_program,
-            debug_info.statements_locations.get_statements_functions_map_for_tests(db),
-            Default::default(),
-        );
         match result.profiling_info {
             Some(raw_profiling_info) => {
-                let profiling_info = profiling_info_processor.process(&raw_profiling_info);
-                println!("Profiling info:\n{}", profiling_info);
+                let statements_functions =
+                    debug_info.statements_locations.get_statements_functions_map_for_tests(db);
+                let profiling_info_processor =
+                    ProfilingInfoProcessor::new(Some(db), &sierra_program, statements_functions);
+
+                let profiling_info =
+                    profiling_info_processor.process(&raw_profiling_info, &Default::default());
+                println!("Profiling info:\n{profiling_info}");
             }
             None => println!("Warning: Profiling info not found."),
         }
@@ -123,8 +130,8 @@ fn main() -> anyhow::Result<()> {
             while let Some(item) = format_next_item(&mut felts) {
                 if !first {
                     print!(", ");
-                    first = false;
                 }
+                first = false;
                 print!("{}", item.quote_if_string());
             }
             println!("].")

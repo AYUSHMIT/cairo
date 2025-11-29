@@ -1,7 +1,7 @@
-//! > match multi numbers.
+//! > match non-sequential numbers.
 
 //! > test_runner_name
-test_function_lowering(expect_diagnostics: true)
+test_function_lowering(expect_diagnostics: false)
 
 //! > function
 fn foo(a: felt252) -> felt252 {
@@ -21,13 +21,46 @@ foo
 //! > semantic_diagnostics
 
 //! > lowering_diagnostics
-error: Unsupported match - numbers must be sequential starting from 0.
- --> lib.cairo:2:13
-    let b = match a {
-            ^*******^
 
 //! > lowering_flat
 Parameters: v0: core::felt252
+blk0 (root):
+Statements:
+  (v1: core::felt252) <- 5
+  (v2: core::felt252) <- core::felt252_sub(v0, v1)
+End:
+  Match(match core::felt252_is_zero(v2) {
+    IsZeroResult::Zero => blk1,
+    IsZeroResult::NonZero(v3) => blk2,
+  })
+
+blk1:
+Statements:
+  (v4: core::felt252) <- 550
+End:
+  Return(v4)
+
+blk2:
+Statements:
+  (v5: core::felt252) <- 6
+  (v6: core::felt252) <- core::felt252_sub(v0, v5)
+End:
+  Match(match core::felt252_is_zero(v6) {
+    IsZeroResult::Zero => blk3,
+    IsZeroResult::NonZero(v7) => blk4,
+  })
+
+blk3:
+Statements:
+  (v8: core::felt252) <- 70
+End:
+  Return(v8)
+
+blk4:
+Statements:
+  (v9: core::felt252) <- 90
+End:
+  Return(v9)
 
 //! > ==========================================================================
 
@@ -202,38 +235,6 @@ End:
 
 //! > ==========================================================================
 
-//! > Test match zero with non-zero value.
-
-//! > test_runner_name
-test_function_lowering(expect_diagnostics: true)
-
-//! > function
-fn foo() -> felt252 {
-    let x = 7;
-    match x {
-        12 => x,
-        _ => 7,
-    }
-}
-
-//! > function_name
-foo
-
-//! > module_code
-
-//! > semantic_diagnostics
-
-//! > lowering_diagnostics
-error: Unsupported match - numbers must be sequential starting from 0.
- --> lib.cairo:3:5
-    match x {
-    ^*******^
-
-//! > lowering_flat
-Parameters:
-
-//! > ==========================================================================
-
 //! > Test unsupported match zero.
 
 //! > test_runner_name
@@ -256,13 +257,16 @@ foo
 //! > semantic_diagnostics
 
 //! > lowering_diagnostics
-error: Match is non exhaustive - match over a numerical value must have a wildcard card pattern (`_`).
- --> lib.cairo:3:5
-    match x {
-    ^*******^
+error: Match is non-exhaustive: `_` not covered.
+ --> lib.cairo:3:5-6:5
+      match x {
+ _____^
+| ...
+|     }
+|_____^
 
 //! > lowering_flat
-Parameters:
+<Failed lowering function - run with RUST_LOG=warn (or less) to see diagnostics>
 
 //! > ==========================================================================
 
@@ -272,8 +276,8 @@ Parameters:
 test_function_lowering(expect_diagnostics: false)
 
 //! > function
-fn foo() {
-    match 5 {
+fn foo(v: u8) {
+    match v {
         0_u8 => 7,
         1_u8 | 2_u8 => 8,
         _ => 9,
@@ -290,11 +294,10 @@ foo
 //! > lowering_diagnostics
 
 //! > lowering_flat
-Parameters:
+Parameters: v0: core::integer::u8
 blk0 (root):
 Statements:
-  (v0: core::integer::u8) <- 5
-  (v1: core::felt252) <- core::integer::u8_to_felt252(v0)
+  (v1: core::felt252) <- core::internal::bounded_int::upcast::<core::integer::u8, core::felt252>(v0)
 End:
   Match(match core::felt252_is_zero(v1) {
     IsZeroResult::Zero => blk1,
@@ -319,7 +322,7 @@ End:
 blk3:
 Statements:
 End:
-  Goto(blk6, {})
+  Return()
 
 blk4:
 Statements:
@@ -328,20 +331,93 @@ Statements:
 End:
   Match(match core::felt252_is_zero(v7) {
     IsZeroResult::Zero => blk5,
-    IsZeroResult::NonZero(v8) => blk7,
+    IsZeroResult::NonZero(v8) => blk6,
   })
 
 blk5:
 Statements:
 End:
-  Goto(blk6, {})
+  Return()
 
 blk6:
 Statements:
 End:
   Return()
 
-blk7:
+//! > ==========================================================================
+
+//! > Test supported match BoundedInt value.
+
+//! > test_runner_name
+test_function_lowering(expect_diagnostics: false)
+
+//! > function
+fn foo(v: Number) {
+    match v {
+        0 => 7,
+        1 | 2 => 8,
+        _ => 9,
+    };
+}
+
+//! > function_name
+foo
+
+//! > module_code
+#[feature("bounded-int-utils")]
+type Number = core::internal::bounded_int::BoundedInt<-30, 90>;
+
+//! > semantic_diagnostics
+
+//! > lowering_diagnostics
+
+//! > lowering_flat
+Parameters: v0: core::internal::bounded_int::BoundedInt::<-30, 90>
+blk0 (root):
+Statements:
+  (v1: core::felt252) <- core::internal::bounded_int::upcast::<core::internal::bounded_int::BoundedInt::<-30, 90>, core::felt252>(v0)
+End:
+  Match(match core::felt252_is_zero(v1) {
+    IsZeroResult::Zero => blk1,
+    IsZeroResult::NonZero(v2) => blk2,
+  })
+
+blk1:
+Statements:
+End:
+  Return()
+
+blk2:
+Statements:
+  (v3: core::felt252) <- 1
+  (v4: core::felt252) <- core::felt252_sub(v1, v3)
+End:
+  Match(match core::felt252_is_zero(v4) {
+    IsZeroResult::Zero => blk3,
+    IsZeroResult::NonZero(v5) => blk4,
+  })
+
+blk3:
+Statements:
+End:
+  Return()
+
+blk4:
+Statements:
+  (v6: core::felt252) <- 2
+  (v7: core::felt252) <- core::felt252_sub(v1, v6)
+End:
+  Match(match core::felt252_is_zero(v7) {
+    IsZeroResult::Zero => blk5,
+    IsZeroResult::NonZero(v8) => blk6,
+  })
+
+blk5:
+Statements:
+End:
+  Return()
+
+blk6:
 Statements:
 End:
   Return()
@@ -371,7 +447,7 @@ foo
 error: Type mismatch: `core::felt252` and `core::integer::u8`.
  --> lib.cairo:4:9
         1_felt252 | 2_u8 => 8,
-        ^*******^
+        ^^^^^^^^^
 
 //! > lowering_diagnostics
 
@@ -387,7 +463,7 @@ test_function_lowering(expect_diagnostics: true)
 
 //! > function
 fn foo() {
-    match Option::Some(5) {};
+    match Some(5) {};
 }
 
 //! > function_name
@@ -398,18 +474,13 @@ foo
 //! > semantic_diagnostics
 
 //! > lowering_diagnostics
-error: Missing match arm: `Some` not covered.
+error: Match is non-exhaustive: `_` not covered.
  --> lib.cairo:2:5
-    match Option::Some(5) {};
-    ^**********************^
-
-error: Missing match arm: `None` not covered.
- --> lib.cairo:2:5
-    match Option::Some(5) {};
-    ^**********************^
+    match Some(5) {};
+    ^^^^^^^^^^^^^^^^
 
 //! > lowering_flat
-Parameters:
+<Failed lowering function - run with RUST_LOG=warn (or less) to see diagnostics>
 
 //! > ==========================================================================
 
@@ -461,18 +532,13 @@ foo
 //! > semantic_diagnostics
 
 //! > lowering_diagnostics
-error: Missing match arm: `Zero` not covered.
- --> lib.cairo:2:11
+error: Match is non-exhaustive: `_` not covered.
+ --> lib.cairo:2:5
     match felt252_is_zero(5) {};
-          ^****************^
-
-error: Missing match arm: `NonZero` not covered.
- --> lib.cairo:2:11
-    match felt252_is_zero(5) {};
-          ^****************^
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
 //! > lowering_flat
-Parameters:
+<Failed lowering function - run with RUST_LOG=warn (or less) to see diagnostics>
 
 //! > ==========================================================================
 
@@ -570,15 +636,15 @@ enum A {
 //! > semantic_diagnostics
 
 //! > lowering_diagnostics
-error: Unreachable pattern arm.
- --> lib.cairo:12:9
-        A::Two(_) => 4,
-        ^*******^
-
-error: Unreachable pattern arm.
- --> lib.cairo:13:9
+warning: Unreachable pattern arm.
+ --> lib.cairo:13:24
         A::Three(_) => 5,
-        ^*********^
+                       ^
+
+warning: Unreachable pattern arm.
+ --> lib.cairo:12:22
+        A::Two(_) => 4,
+                     ^
 
 //! > lowering_flat
 Parameters: v0: test::A
@@ -727,7 +793,7 @@ End:
 //! > Match on tuples.
 
 //! > test_runner_name
-test_function_lowering(expect_diagnostics: true)
+test_function_lowering(expect_diagnostics: false)
 
 //! > function
 fn foo(a: (felt252, felt252)) -> felt252 {
@@ -745,13 +811,49 @@ foo
 //! > semantic_diagnostics
 
 //! > lowering_diagnostics
-error: Unsupported matched value. Currently, match on tuples only supports enums as tuple members.
- --> lib.cairo:2:11
-    match a {
-          ^
 
 //! > lowering_flat
 Parameters: v0: (core::felt252, core::felt252)
+blk0 (root):
+Statements:
+  (v1: core::felt252, v2: core::felt252) <- struct_destructure(v0)
+End:
+  Match(match core::felt252_is_zero(v1) {
+    IsZeroResult::Zero => blk1,
+    IsZeroResult::NonZero(v3) => blk4,
+  })
+
+blk1:
+Statements:
+  (v4: core::felt252) <- 1
+  (v5: core::felt252) <- core::felt252_sub(v2, v4)
+End:
+  Match(match core::felt252_is_zero(v5) {
+    IsZeroResult::Zero => blk2,
+    IsZeroResult::NonZero(v6) => blk3,
+  })
+
+blk2:
+Statements:
+  (v7: core::felt252) <- 0
+End:
+  Return(v7)
+
+blk3:
+Statements:
+End:
+  Goto(blk5, {})
+
+blk4:
+Statements:
+End:
+  Goto(blk5, {})
+
+blk5:
+Statements:
+  (v8: core::felt252) <- 1
+End:
+  Return(v8)
 
 //! > ==========================================================================
 
@@ -763,8 +865,8 @@ test_function_lowering(expect_diagnostics: true)
 //! > function
 fn foo(a: Option<Option<felt252>>) -> felt252 {
     match a {
-        Option::Some(Option::Some(x)) => x,
-        Option::None(_) => 1,
+        Some(Some(x)) => x,
+        None(_) => 1,
     }
 }
 
@@ -776,13 +878,16 @@ foo
 //! > semantic_diagnostics
 
 //! > lowering_diagnostics
-error: Inner patterns are not in this context.
- --> lib.cairo:3:22
-        Option::Some(Option::Some(x)) => x,
-                     ^*************^
+error: Match is non-exhaustive: `Some(None(_))` not covered.
+ --> lib.cairo:2:5-5:5
+      match a {
+ _____^
+| ...
+|     }
+|_____^
 
 //! > lowering_flat
-Parameters: v0: core::option::Option::<core::option::Option::<core::felt252>>
+<Failed lowering function - run with RUST_LOG=warn (or less) to see diagnostics>
 
 //! > ==========================================================================
 
@@ -813,18 +918,16 @@ enum A {
 //! > semantic_diagnostics
 
 //! > lowering_diagnostics
-error: Missing match arm: `Three` not covered.
- --> lib.cairo:8:5
-    match a {
-    ^*******^
-
-error: Missing match arm: `Four` not covered.
- --> lib.cairo:8:5
-    match a {
-    ^*******^
+error: Match is non-exhaustive: `Three(_)` not covered.
+ --> lib.cairo:8:5-11:5
+      match a {
+ _____^
+| ...
+|     }
+|_____^
 
 //! > lowering_flat
-Parameters: v0: test::A
+<Failed lowering function - run with RUST_LOG=warn (or less) to see diagnostics>
 
 //! > ==========================================================================
 
@@ -1076,10 +1179,10 @@ fn foo(a: A, b: A) -> felt252 {
     let x = (@a, b);
     let y = @x;
     match y {
-        (A::Two((t, _)), A::One) => **t + 3,
-        (A::Two, _) => 2,
+        (A::Two((t, _)), A::One(_)) => **t + 3,
+        (A::Two(_), _) => 2,
         (A::One(_), A::One(_)) => 1,
-        (_, A::Three(_)) => 3,
+        (_, A::Three) => 3,
         (_, _) => 6,
     }
 }
@@ -1220,10 +1323,10 @@ test_function_lowering(expect_diagnostics: true)
 //! > function
 fn foo(a: A, b: A) -> felt252 {
     match (a, b) {
-        (A::Two, A::One) => 5,
-        (A::Two, _) => 2,
+        (A::Two(_), A::One(_)) => 5,
+        (A::Two(_), _) => 2,
         (A::One(_), A::One(_)) => 1,
-        (_, A::Three(_)) => 3,
+        (_, A::Three) => 3,
         (_, A::Four) => 4,
     }
 }
@@ -1243,45 +1346,28 @@ enum A {
 //! > semantic_diagnostics
 
 //! > lowering_diagnostics
-error: Missing match arm: `(One, Two)` not covered.
- --> lib.cairo:9:11
-    match (a, b) {
-          ^****^
-
-error: Missing match arm: `(Three, One)` not covered.
- --> lib.cairo:9:11
-    match (a, b) {
-          ^****^
-
-error: Missing match arm: `(Three, Two)` not covered.
- --> lib.cairo:9:11
-    match (a, b) {
-          ^****^
-
-error: Missing match arm: `(Four, One)` not covered.
- --> lib.cairo:9:11
-    match (a, b) {
-          ^****^
-
-error: Missing match arm: `(Four, Two)` not covered.
- --> lib.cairo:9:11
-    match (a, b) {
-          ^****^
+error: Match is non-exhaustive: `(One(_), Two(_))` not covered.
+ --> lib.cairo:9:5-15:5
+      match (a, b) {
+ _____^
+| ...
+|     }
+|_____^
 
 //! > lowering_flat
-Parameters: v0: test::A, v1: test::A
+<Failed lowering function - run with RUST_LOG=warn (or less) to see diagnostics>
 
 //! > ==========================================================================
 
 //! > Test match on enum tuples with inner tuples.
 
 //! > test_runner_name
-test_function_lowering(expect_diagnostics: true)
+test_function_lowering(expect_diagnostics: false)
 
 //! > function
 fn foo(a: A, b: A) -> felt252 {
     match (a, (a, b)) {
-        (A::Two, (A::One, A::One)) => 8,
+        (A::Two(_), (A::One(_), A::One(_))) => 8,
         _ => 4,
     }
 }
@@ -1301,13 +1387,95 @@ enum A {
 //! > semantic_diagnostics
 
 //! > lowering_diagnostics
-error: Unsupported matched value. Currently, match on tuples only supports enums as tuple members.
- --> lib.cairo:9:11
-    match (a, (a, b)) {
-          ^*********^
 
 //! > lowering_flat
 Parameters: v0: test::A, v1: test::A
+blk0 (root):
+Statements:
+End:
+  Match(match_enum(v0) {
+    A::One(v2) => blk1,
+    A::Two(v3) => blk2,
+    A::Three(v4) => blk11,
+    A::Four(v5) => blk12,
+  })
+
+blk1:
+Statements:
+End:
+  Goto(blk13, {})
+
+blk2:
+Statements:
+End:
+  Match(match_enum(v0) {
+    A::One(v6) => blk3,
+    A::Two(v7) => blk8,
+    A::Three(v8) => blk9,
+    A::Four(v9) => blk10,
+  })
+
+blk3:
+Statements:
+End:
+  Match(match_enum(v1) {
+    A::One(v10) => blk4,
+    A::Two(v11) => blk5,
+    A::Three(v12) => blk6,
+    A::Four(v13) => blk7,
+  })
+
+blk4:
+Statements:
+  (v14: core::felt252) <- 8
+End:
+  Return(v14)
+
+blk5:
+Statements:
+End:
+  Goto(blk13, {})
+
+blk6:
+Statements:
+End:
+  Goto(blk13, {})
+
+blk7:
+Statements:
+End:
+  Goto(blk13, {})
+
+blk8:
+Statements:
+End:
+  Goto(blk13, {})
+
+blk9:
+Statements:
+End:
+  Goto(blk13, {})
+
+blk10:
+Statements:
+End:
+  Goto(blk13, {})
+
+blk11:
+Statements:
+End:
+  Goto(blk13, {})
+
+blk12:
+Statements:
+End:
+  Goto(blk13, {})
+
+blk13:
+Statements:
+  (v15: core::felt252) <- 4
+End:
+  Return(v15)
 
 //! > ==========================================================================
 
@@ -1319,8 +1487,8 @@ test_function_lowering(expect_diagnostics: false)
 //! > function
 fn foo(a: A) -> felt252 {
     match (a, get_bool()) {
-        (A::Two, true) => 5,
-        (A::Two, _) => 2,
+        (A::Two(_), true) => 5,
+        (A::Two(_), _) => 2,
         (A::One(_), false) => 1,
         (_, _) => 6,
     }
@@ -1373,7 +1541,7 @@ End:
     A::One(v6) => blk4,
     A::Two(v7) => blk7,
     A::Three(v8) => blk10,
-    A::Four(v9) => blk13,
+    A::Four(v9) => blk11,
   })
 
 blk4:
@@ -1393,7 +1561,7 @@ End:
 blk6:
 Statements:
 End:
-  Goto(blk16, {})
+  Goto(blk12, {})
 
 blk7:
 Statements:
@@ -1418,51 +1586,25 @@ End:
 blk10:
 Statements:
 End:
-  Match(match_enum(v3) {
-    bool::False(v17) => blk11,
-    bool::True(v18) => blk12,
-  })
+  Goto(blk12, {})
 
 blk11:
 Statements:
 End:
-  Goto(blk16, {})
+  Goto(blk12, {})
 
 blk12:
 Statements:
+  (v17: core::felt252) <- 6
 End:
-  Goto(blk16, {})
-
-blk13:
-Statements:
-End:
-  Match(match_enum(v3) {
-    bool::False(v19) => blk14,
-    bool::True(v20) => blk15,
-  })
-
-blk14:
-Statements:
-End:
-  Goto(blk16, {})
-
-blk15:
-Statements:
-End:
-  Goto(blk16, {})
-
-blk16:
-Statements:
-  (v21: core::felt252) <- 6
-End:
-  Return(v21)
+  Return(v17)
 
 //! > ==========================================================================
 
-//! > Test match unsupported type.
+//! > Test u256 match
 
 //! > test_runner_name
-test_function_lowering(expect_diagnostics: true)
+test_function_lowering(expect_diagnostics: false)
 
 //! > function
 fn foo() -> felt252 {
@@ -1480,13 +1622,14 @@ foo
 //! > semantic_diagnostics
 
 //! > lowering_diagnostics
-error: Unsupported matched type. Type: `core::integer::u256`.
- --> lib.cairo:2:11
-    match 5_u256 {
-          ^****^
 
 //! > lowering_flat
 Parameters:
+blk0 (root):
+Statements:
+  (v0: core::felt252) <- 2
+End:
+  Return(v0)
 
 //! > ==========================================================================
 
@@ -1523,7 +1666,7 @@ Parameters: v0: core::RangeCheck, v1: core::integer::u32
 blk0 (root):
 Statements:
 End:
-  Match(match core::integer::downcast::<core::integer::u32, core::internal::bounded_int::BoundedInt::<0, 6>>(v0, v1) {
+  Match(match core::internal::bounded_int::downcast::<core::integer::u32, core::internal::bounded_int::BoundedInt::<0, 6>>(v0, v1) {
     Option::Some(v2, v3) => blk1,
     Option::None(v4) => blk9,
   })
@@ -1588,3 +1731,1836 @@ Statements:
   (v19: core::felt252) <- 8
 End:
   Return(v4, v19)
+
+//! > ==========================================================================
+
+//! > Test double Otherwise arm.
+
+//! > test_runner_name
+test_function_lowering(expect_diagnostics: true)
+
+//! > function
+fn foo(a: A) -> felt252 {
+    match a {
+        A::Two(_) => 2,
+        A::One(_) => 1,
+        _ => 0,
+        _ => 5,
+    }
+}
+
+//! > function_name
+foo
+
+//! > module_code
+enum A {
+    One: (),
+    Two: (),
+    Three: (),
+    Four: (),
+}
+
+//! > semantic_diagnostics
+
+//! > lowering_diagnostics
+warning: Unreachable pattern arm.
+ --> lib.cairo:12:14
+        _ => 5,
+             ^
+
+//! > lowering_flat
+Parameters: v0: test::A
+blk0 (root):
+Statements:
+End:
+  Match(match_enum(v0) {
+    A::One(v1) => blk1,
+    A::Two(v2) => blk2,
+    A::Three(v3) => blk3,
+    A::Four(v4) => blk4,
+  })
+
+blk1:
+Statements:
+  (v5: core::felt252) <- 1
+End:
+  Return(v5)
+
+blk2:
+Statements:
+  (v6: core::felt252) <- 2
+End:
+  Return(v6)
+
+blk3:
+Statements:
+End:
+  Goto(blk5, {})
+
+blk4:
+Statements:
+End:
+  Goto(blk5, {})
+
+blk5:
+Statements:
+  (v7: core::felt252) <- 0
+End:
+  Return(v7)
+
+//! > ==========================================================================
+
+//! > Test hiding arms.
+
+//! > test_runner_name
+test_function_lowering(expect_diagnostics: true)
+
+//! > function
+fn foo(a: A) -> felt252 {
+    match a {
+        A::Two(_) => 2,
+        A::One(_) => 1,
+        _ => 0,
+        A::One(_) => 5,
+    }
+}
+
+//! > function_name
+foo
+
+//! > module_code
+enum A {
+    One: (),
+    Two: (),
+    Three: (),
+    Four: (),
+}
+
+//! > semantic_diagnostics
+
+//! > lowering_diagnostics
+warning: Unreachable pattern arm.
+ --> lib.cairo:12:22
+        A::One(_) => 5,
+                     ^
+
+//! > lowering_flat
+Parameters: v0: test::A
+blk0 (root):
+Statements:
+End:
+  Match(match_enum(v0) {
+    A::One(v1) => blk1,
+    A::Two(v2) => blk2,
+    A::Three(v3) => blk3,
+    A::Four(v4) => blk4,
+  })
+
+blk1:
+Statements:
+  (v5: core::felt252) <- 1
+End:
+  Return(v5)
+
+blk2:
+Statements:
+  (v6: core::felt252) <- 2
+End:
+  Return(v6)
+
+blk3:
+Statements:
+End:
+  Goto(blk5, {})
+
+blk4:
+Statements:
+End:
+  Goto(blk5, {})
+
+blk5:
+Statements:
+  (v7: core::felt252) <- 0
+End:
+  Return(v7)
+
+//! > ==========================================================================
+
+//! > Test Match Tuple with Enum with Tuple with Enum and variable use.
+
+//! > test_runner_name
+test_function_lowering(expect_diagnostics: false)
+
+//! > function
+fn foo(a: A, b: A) -> felt252 {
+    match (a, b) {
+        (A::Two((t, _)), A::One(_)) => t + 3,
+        (A::Two(_), _) => 2,
+        (A::One(_), A::One(_)) => 1,
+        (_, A::Three(((_, B::One(x)), _))) => x,
+        (_, A::Three(((_, _), x))) => x,
+        (_, _) => 6,
+    }
+}
+
+//! > function_name
+foo
+
+//! > module_code
+#[derive(Copy, Drop)]
+enum A {
+    One: felt252,
+    Two: (felt252, felt252),
+    Three: ((felt252, B), felt252),
+    Four: (felt252, felt252, felt252, felt252),
+}
+
+#[derive(Copy, Drop)]
+enum B {
+    One: felt252,
+    Two: (felt252, felt252),
+}
+
+//! > semantic_diagnostics
+
+//! > lowering_diagnostics
+
+//! > lowering_flat
+Parameters: v0: test::A, v1: test::A
+blk0 (root):
+Statements:
+End:
+  Match(match_enum(v0) {
+    A::One(v2) => blk1,
+    A::Two(v3) => blk8,
+    A::Three(v4) => blk14,
+    A::Four(v5) => blk15,
+  })
+
+blk1:
+Statements:
+End:
+  Match(match_enum(v1) {
+    A::One(v6) => blk2,
+    A::Two(v7) => blk3,
+    A::Three(v8) => blk4,
+    A::Four(v9) => blk7,
+  })
+
+blk2:
+Statements:
+  (v10: core::felt252) <- 1
+End:
+  Return(v10)
+
+blk3:
+Statements:
+End:
+  Goto(blk23, {})
+
+blk4:
+Statements:
+  (v11: (core::felt252, test::B), v12: core::felt252) <- struct_destructure(v8)
+  (v13: core::felt252, v14: test::B) <- struct_destructure(v11)
+End:
+  Match(match_enum(v14) {
+    B::One(v15) => blk5,
+    B::Two(v16) => blk6,
+  })
+
+blk5:
+Statements:
+End:
+  Return(v15)
+
+blk6:
+Statements:
+End:
+  Return(v12)
+
+blk7:
+Statements:
+End:
+  Goto(blk23, {})
+
+blk8:
+Statements:
+End:
+  Match(match_enum(v1) {
+    A::One(v17) => blk9,
+    A::Two(v18) => blk10,
+    A::Three(v19) => blk11,
+    A::Four(v20) => blk12,
+  })
+
+blk9:
+Statements:
+  (v21: core::felt252, v22: core::felt252) <- struct_destructure(v3)
+  (v23: core::felt252) <- 3
+  (v24: core::felt252) <- core::felt252_add(v21, v23)
+End:
+  Return(v24)
+
+blk10:
+Statements:
+End:
+  Goto(blk13, {})
+
+blk11:
+Statements:
+End:
+  Goto(blk13, {})
+
+blk12:
+Statements:
+End:
+  Goto(blk13, {})
+
+blk13:
+Statements:
+  (v25: core::felt252) <- 2
+End:
+  Return(v25)
+
+blk14:
+Statements:
+End:
+  Goto(blk16, {})
+
+blk15:
+Statements:
+End:
+  Goto(blk16, {})
+
+blk16:
+Statements:
+End:
+  Match(match_enum(v1) {
+    A::One(v26) => blk17,
+    A::Two(v27) => blk18,
+    A::Three(v28) => blk19,
+    A::Four(v29) => blk22,
+  })
+
+blk17:
+Statements:
+End:
+  Goto(blk23, {})
+
+blk18:
+Statements:
+End:
+  Goto(blk23, {})
+
+blk19:
+Statements:
+  (v30: (core::felt252, test::B), v31: core::felt252) <- struct_destructure(v28)
+  (v32: core::felt252, v33: test::B) <- struct_destructure(v30)
+End:
+  Match(match_enum(v33) {
+    B::One(v34) => blk20,
+    B::Two(v35) => blk21,
+  })
+
+blk20:
+Statements:
+End:
+  Return(v34)
+
+blk21:
+Statements:
+End:
+  Return(v31)
+
+blk22:
+Statements:
+End:
+  Goto(blk23, {})
+
+blk23:
+Statements:
+  (v36: core::felt252) <- 6
+End:
+  Return(v36)
+
+//! > ==========================================================================
+
+//! > Test Match Enum with inner triple Tuple and variable use.
+
+//! > test_runner_name
+test_function_lowering(expect_diagnostics: false)
+
+//! > function
+fn foo(a: A) -> felt252 {
+    match a {
+        A::Two(((_, (t,)), _)) => t + 3,
+        _ => 6,
+    }
+}
+
+//! > function_name
+foo
+
+//! > module_code
+#[derive(Copy, Drop)]
+enum A {
+    One: felt252,
+    Two: ((felt252, (felt252,)), felt252),
+    Three: ((felt252, B), felt252),
+    Four: (felt252, felt252, felt252, felt252),
+}
+
+#[derive(Copy, Drop)]
+enum B {
+    One: felt252,
+    Two: (felt252, felt252),
+}
+
+//! > semantic_diagnostics
+
+//! > lowering_diagnostics
+
+//! > lowering_flat
+Parameters: v0: test::A
+blk0 (root):
+Statements:
+End:
+  Match(match_enum(v0) {
+    A::One(v1) => blk1,
+    A::Two(v2) => blk2,
+    A::Three(v3) => blk3,
+    A::Four(v4) => blk4,
+  })
+
+blk1:
+Statements:
+End:
+  Goto(blk5, {})
+
+blk2:
+Statements:
+  (v5: (core::felt252, (core::felt252,)), v6: core::felt252) <- struct_destructure(v2)
+  (v7: core::felt252, v8: (core::felt252,)) <- struct_destructure(v5)
+  (v9: core::felt252) <- struct_destructure(v8)
+  (v10: core::felt252) <- 3
+  (v11: core::felt252) <- core::felt252_add(v9, v10)
+End:
+  Return(v11)
+
+blk3:
+Statements:
+End:
+  Goto(blk5, {})
+
+blk4:
+Statements:
+End:
+  Goto(blk5, {})
+
+blk5:
+Statements:
+  (v12: core::felt252) <- 6
+End:
+  Return(v12)
+
+//! > ==========================================================================
+
+//! > Test Match Enum with inner triple Tuple with inner Enum and variable use.
+
+//! > test_runner_name
+test_function_lowering(expect_diagnostics: false)
+
+//! > function
+fn foo(a: A) -> felt252 {
+    match a {
+        A::Three(((_, (B::One(t),)), _)) => t + 3,
+        _ => 6,
+    }
+}
+
+//! > function_name
+foo
+
+//! > module_code
+#[derive(Copy, Drop)]
+enum A {
+    One: felt252,
+    Two: (felt252, felt252),
+    Three: ((felt252, (B,)), felt252),
+    Four: (felt252, felt252, felt252, felt252),
+}
+
+#[derive(Copy, Drop)]
+enum B {
+    One: felt252,
+    Two: (felt252, felt252),
+}
+
+//! > semantic_diagnostics
+
+//! > lowering_diagnostics
+
+//! > lowering_flat
+Parameters: v0: test::A
+blk0 (root):
+Statements:
+End:
+  Match(match_enum(v0) {
+    A::One(v1) => blk1,
+    A::Two(v2) => blk2,
+    A::Three(v3) => blk3,
+    A::Four(v4) => blk6,
+  })
+
+blk1:
+Statements:
+End:
+  Goto(blk7, {})
+
+blk2:
+Statements:
+End:
+  Goto(blk7, {})
+
+blk3:
+Statements:
+  (v5: (core::felt252, (test::B,)), v6: core::felt252) <- struct_destructure(v3)
+  (v7: core::felt252, v8: (test::B,)) <- struct_destructure(v5)
+  (v9: test::B) <- struct_destructure(v8)
+End:
+  Match(match_enum(v9) {
+    B::One(v10) => blk4,
+    B::Two(v11) => blk5,
+  })
+
+blk4:
+Statements:
+  (v12: core::felt252) <- 3
+  (v13: core::felt252) <- core::felt252_add(v10, v12)
+End:
+  Return(v13)
+
+blk5:
+Statements:
+End:
+  Goto(blk7, {})
+
+blk6:
+Statements:
+End:
+  Goto(blk7, {})
+
+blk7:
+Statements:
+  (v14: core::felt252) <- 6
+End:
+  Return(v14)
+
+//! > ==========================================================================
+
+//! > Test Match triple Tuple and variable use.
+
+//! > test_runner_name
+test_function_lowering(expect_diagnostics: false)
+
+//! > function
+fn foo(a: ((felt252, (A,)), felt252)) -> felt252 {
+    match a {
+        ((_, (A::One(t),)), _) => t + 3,
+        _ => 6,
+    }
+}
+
+//! > function_name
+foo
+
+//! > module_code
+#[derive(Copy, Drop)]
+enum A {
+    One: felt252,
+    Two: (felt252, felt252),
+    Three: ((felt252, (B,)), felt252),
+    Four: (felt252, felt252, felt252, felt252),
+}
+
+#[derive(Copy, Drop)]
+enum B {
+    One: felt252,
+    Two: (felt252, felt252),
+}
+
+//! > semantic_diagnostics
+
+//! > lowering_diagnostics
+
+//! > lowering_flat
+Parameters: v0: ((core::felt252, (test::A,)), core::felt252)
+blk0 (root):
+Statements:
+  (v1: (core::felt252, (test::A,)), v2: core::felt252) <- struct_destructure(v0)
+  (v3: core::felt252, v4: (test::A,)) <- struct_destructure(v1)
+  (v5: test::A) <- struct_destructure(v4)
+End:
+  Match(match_enum(v5) {
+    A::One(v6) => blk1,
+    A::Two(v7) => blk2,
+    A::Three(v8) => blk3,
+    A::Four(v9) => blk4,
+  })
+
+blk1:
+Statements:
+  (v10: core::felt252) <- 3
+  (v11: core::felt252) <- core::felt252_add(v6, v10)
+End:
+  Return(v11)
+
+blk2:
+Statements:
+End:
+  Goto(blk5, {})
+
+blk3:
+Statements:
+End:
+  Goto(blk5, {})
+
+blk4:
+Statements:
+End:
+  Goto(blk5, {})
+
+blk5:
+Statements:
+  (v12: core::felt252) <- 6
+End:
+  Return(v12)
+
+//! > ==========================================================================
+
+//! > Test match unreachable Otherwise.
+
+//! > test_runner_name
+test_function_lowering(expect_diagnostics: true)
+
+//! > function
+fn foo(a: Option<felt252>) -> felt252 {
+    match a {
+        Some(_) => 5,
+        None => 6,
+        _ => 7,
+    }
+}
+
+//! > function_name
+foo
+
+//! > module_code
+
+//! > semantic_diagnostics
+
+//! > lowering_diagnostics
+warning: Unreachable pattern arm.
+ --> lib.cairo:5:14
+        _ => 7,
+             ^
+
+//! > lowering_flat
+Parameters: v0: core::option::Option::<core::felt252>
+blk0 (root):
+Statements:
+End:
+  Match(match_enum(v0) {
+    Option::Some(v1) => blk1,
+    Option::None(v2) => blk2,
+  })
+
+blk1:
+Statements:
+  (v3: core::felt252) <- 5
+End:
+  Return(v3)
+
+blk2:
+Statements:
+  (v4: core::felt252) <- 6
+End:
+  Return(v4)
+
+//! > ==========================================================================
+
+//! > Test lower match missing args.
+
+//! > test_runner_name
+test_function_lowering(expect_diagnostics: true)
+
+//! > function
+fn foo(a: felt252) -> felt252 {
+    match Some(a) {
+        Some => 2,
+        _ => 0,
+    }
+}
+
+//! > function_name
+foo
+
+//! > module_code
+
+//! > semantic_diagnostics
+warning: Pattern missing subpattern for the payload of variant. Consider using `Some(_)`
+ --> lib.cairo:3:9
+        Some => 2,
+        ^^^^
+
+//! > lowering_diagnostics
+
+//! > lowering_flat
+Parameters: v0: core::felt252
+blk0 (root):
+Statements:
+  (v1: core::felt252) <- 2
+End:
+  Return(v1)
+
+//! > ==========================================================================
+
+//! > Test lower match with _ args.
+
+//! > test_runner_name
+test_function_lowering(expect_diagnostics: false)
+
+//! > function
+fn foo(a: felt252) -> felt252 {
+    match Some(a) {
+        Some(_) => 2,
+        _ => 0,
+    }
+}
+
+//! > function_name
+foo
+
+//! > module_code
+
+//! > semantic_diagnostics
+
+//! > lowering_diagnostics
+
+//! > lowering_flat
+Parameters: v0: core::felt252
+blk0 (root):
+Statements:
+  (v1: core::felt252) <- 2
+End:
+  Return(v1)
+
+//! > ==========================================================================
+
+//! > Test empty enum match on empty enum with otherwise.
+
+//! > test_runner_name
+test_function_lowering(expect_diagnostics: false)
+
+//! > function
+fn foo(e: EmptyEnum) -> felt252 {
+    match e {
+        _ => { 1 },
+    }
+}
+
+fn bar(e: Option<EmptyEnum>) -> felt252 {
+    if let Some(e) = e {
+        foo(e)
+    } else {
+        0
+    }
+}
+
+//! > function_name
+bar
+
+//! > module_code
+#[derive(Copy, Drop)]
+enum EmptyEnum {}
+
+//! > semantic_diagnostics
+
+//! > lowering_diagnostics
+
+//! > lowering_flat
+Parameters: v0: core::option::Option::<test::EmptyEnum>
+blk0 (root):
+Statements:
+End:
+  Match(match_enum(v0) {
+    Option::Some(v1) => blk1,
+    Option::None(v2) => blk2,
+  })
+
+blk1:
+Statements:
+End:
+  Match(match_enum(v1) {
+  })
+
+blk2:
+Statements:
+  (v3: core::felt252) <- 0
+End:
+  Return(v3)
+
+//! > ==========================================================================
+
+//! > Match with complex patterns and don't double report errors.
+
+//! > test_runner_name
+test_function_lowering(expect_diagnostics: true)
+
+//! > function
+fn foo(a: Option<Option<A>>) -> felt252 {
+    match a {
+        Some(Some(A::One)) => 3,
+        // Creates two `Full` nodes in variant tree.
+        Some(Some(_)) => 2,
+        None(_) => 1,
+    }
+}
+
+//! > function_name
+foo
+
+//! > module_code
+enum A {
+    One: (),
+    Two: (),
+    Three: (),
+}
+
+//! > semantic_diagnostics
+
+//! > lowering_diagnostics
+error: Match is non-exhaustive: `Some(None(_))` not covered.
+ --> lib.cairo:7:5-12:5
+      match a {
+ _____^
+| ...
+|     }
+|_____^
+
+//! > lowering_flat
+<Failed lowering function - run with RUST_LOG=warn (or less) to see diagnostics>
+
+//! > ==========================================================================
+
+//! > Match with complex patterns and no other diagnostics.
+
+//! > test_runner_name
+test_function_lowering(expect_diagnostics: false)
+
+//! > function
+fn foo(a: Option<Option<A>>) -> felt252 {
+    match a {
+        Some(Some(A::One)) => 3,
+        // Creates two patterns in variant tree.
+        Some(Some(_)) => 2,
+        Some(None) => 4,
+        None(_) => 1,
+    }
+}
+
+//! > function_name
+foo
+
+//! > module_code
+enum A {
+    One: (),
+    Two: (),
+    Three: (),
+}
+
+//! > semantic_diagnostics
+
+//! > lowering_diagnostics
+
+//! > lowering_flat
+Parameters: v0: core::option::Option::<core::option::Option::<test::A>>
+blk0 (root):
+Statements:
+End:
+  Match(match_enum(v0) {
+    Option::Some(v1) => blk1,
+    Option::None(v2) => blk8,
+  })
+
+blk1:
+Statements:
+End:
+  Match(match_enum(v1) {
+    Option::Some(v3) => blk2,
+    Option::None(v4) => blk7,
+  })
+
+blk2:
+Statements:
+End:
+  Match(match_enum(v3) {
+    A::One(v5) => blk3,
+    A::Two(v6) => blk4,
+    A::Three(v7) => blk5,
+  })
+
+blk3:
+Statements:
+  (v8: core::felt252) <- 3
+End:
+  Return(v8)
+
+blk4:
+Statements:
+End:
+  Goto(blk6, {})
+
+blk5:
+Statements:
+End:
+  Goto(blk6, {})
+
+blk6:
+Statements:
+  (v9: core::felt252) <- 2
+End:
+  Return(v9)
+
+blk7:
+Statements:
+  (v10: core::felt252) <- 4
+End:
+  Return(v10)
+
+blk8:
+Statements:
+  (v11: core::felt252) <- 1
+End:
+  Return(v11)
+
+//! > ==========================================================================
+
+//! > Match on enum variants and bind vars from different variants.
+
+//! > test_runner_name
+test_function_lowering(expect_diagnostics: false)
+
+//! > function
+fn foo(c: C) -> felt252 {
+    match c {
+        C::One(B::One(A::Two(x))) | C::One(B::One(A::One(x))) => x + x,
+    }
+}
+
+//! > function_name
+foo
+
+//! > module_code
+enum A {
+    One: felt252,
+    Two: felt252,
+}
+
+enum B {
+    One: A,
+}
+
+enum C {
+    One: B,
+}
+
+//! > semantic_diagnostics
+
+//! > lowering_diagnostics
+
+//! > lowering_flat
+Parameters: v0: test::C
+blk0 (root):
+Statements:
+End:
+  Match(match_enum(v0) {
+    C::One(v1) => blk1,
+  })
+
+blk1:
+Statements:
+End:
+  Match(match_enum(v1) {
+    B::One(v2) => blk2,
+  })
+
+blk2:
+Statements:
+End:
+  Match(match_enum(v2) {
+    A::One(v3) => blk3,
+    A::Two(v4) => blk4,
+  })
+
+blk3:
+Statements:
+End:
+  Goto(blk5, {v3 -> v5})
+
+blk4:
+Statements:
+End:
+  Goto(blk5, {v4 -> v5})
+
+blk5:
+Statements:
+  (v6: core::felt252) <- core::felt252_add(v5, v5)
+End:
+  Return(v6)
+
+//! > ==========================================================================
+
+//! > Match on 3 level enum variants with a pattern binding.
+
+//! > test_runner_name
+test_function_lowering(expect_diagnostics: false)
+
+//! > function
+fn foo(a: A) -> felt252 {
+    match a {
+        Ok(Ok(Ok(x))) => x,
+        Ok(Ok(Err(x))) | Err(Err(Err(x))) | Ok(Err(Ok(x))) | Err(Ok(Ok(x))) => x + x,
+        Err(Ok(Err(x))) | Ok(Err(Err(x))) | Err(Err(Ok(x))) => x * x,
+    }
+}
+
+//! > function_name
+foo
+
+//! > module_code
+type A = Result<B, B>;
+type B = Result<C, C>;
+type C = Result<felt252, felt252>;
+
+//! > semantic_diagnostics
+
+//! > lowering_diagnostics
+
+//! > lowering_flat
+Parameters: v0: core::result::Result::<core::result::Result::<core::result::Result::<core::felt252, core::felt252>, core::result::Result::<core::felt252, core::felt252>>, core::result::Result::<core::result::Result::<core::felt252, core::felt252>, core::result::Result::<core::felt252, core::felt252>>>
+blk0 (root):
+Statements:
+End:
+  Match(match_enum(v0) {
+    Result::Ok(v1) => blk1,
+    Result::Err(v2) => blk8,
+  })
+
+blk1:
+Statements:
+End:
+  Match(match_enum(v1) {
+    Result::Ok(v3) => blk2,
+    Result::Err(v4) => blk5,
+  })
+
+blk2:
+Statements:
+End:
+  Match(match_enum(v3) {
+    Result::Ok(v5) => blk3,
+    Result::Err(v6) => blk4,
+  })
+
+blk3:
+Statements:
+End:
+  Return(v5)
+
+blk4:
+Statements:
+End:
+  Goto(blk16, {v6 -> v7})
+
+blk5:
+Statements:
+End:
+  Match(match_enum(v4) {
+    Result::Ok(v8) => blk6,
+    Result::Err(v9) => blk7,
+  })
+
+blk6:
+Statements:
+End:
+  Goto(blk16, {v8 -> v7})
+
+blk7:
+Statements:
+End:
+  Goto(blk14, {v9 -> v10})
+
+blk8:
+Statements:
+End:
+  Match(match_enum(v2) {
+    Result::Ok(v11) => blk9,
+    Result::Err(v12) => blk12,
+  })
+
+blk9:
+Statements:
+End:
+  Match(match_enum(v11) {
+    Result::Ok(v13) => blk10,
+    Result::Err(v14) => blk11,
+  })
+
+blk10:
+Statements:
+End:
+  Goto(blk16, {v13 -> v7})
+
+blk11:
+Statements:
+End:
+  Goto(blk14, {v14 -> v10})
+
+blk12:
+Statements:
+End:
+  Match(match_enum(v12) {
+    Result::Ok(v15) => blk13,
+    Result::Err(v16) => blk15,
+  })
+
+blk13:
+Statements:
+End:
+  Goto(blk14, {v15 -> v10})
+
+blk14:
+Statements:
+  (v17: core::felt252) <- core::felt252_mul(v10, v10)
+End:
+  Return(v17)
+
+blk15:
+Statements:
+End:
+  Goto(blk16, {v16 -> v7})
+
+blk16:
+Statements:
+  (v18: core::felt252) <- core::felt252_add(v7, v7)
+End:
+  Return(v18)
+
+//! > ==========================================================================
+
+//! > Match on 3 level enum variants with a missing pattern on variant in bottom type.
+
+//! > test_runner_name
+test_function_lowering(expect_diagnostics: true)
+
+//! > function
+fn foo(a: A) -> felt252 {
+    match a {
+        // Ok(Ok(Ok(()))) => 1,
+        Ok(Ok(Err(()))) => 2,
+        Ok(Err(Ok(()))) => 3,
+        Ok(Err(Err(()))) => 4,
+        Err(Ok(Ok(()))) => 5,
+        Err(Ok(Err(()))) => 6,
+        Err(Err(Ok(()))) => 7,
+        Err(Err(Err(()))) => 8,
+    }
+}
+
+//! > function_name
+foo
+
+//! > module_code
+type A = Result<B, B>;
+type B = Result<C, C>;
+type C = Result<(), ()>;
+
+//! > semantic_diagnostics
+
+//! > lowering_diagnostics
+error: Match is non-exhaustive: `Ok(Ok(Ok(_)))` not covered.
+ --> lib.cairo:5:5-14:5
+      match a {
+ _____^
+| ...
+|     }
+|_____^
+
+//! > lowering_flat
+<Failed lowering function - run with RUST_LOG=warn (or less) to see diagnostics>
+
+//! > ==========================================================================
+
+//! > Match on 3 level enum variants with a missing pattern on variant in middle type.
+
+//! > test_runner_name
+test_function_lowering(expect_diagnostics: true)
+
+//! > function
+fn foo(a: A) -> felt252 {
+    match a {
+        Ok(Ok(Ok(()))) => 1,
+        Ok(Ok(Err(()))) => 2,
+        // Ok(Err(Ok(()))) => 3,
+        // Ok(Err(Err(()))) => 4,
+        Err(Ok(Ok(()))) => 5,
+        Err(Ok(Err(()))) => 6,
+        Err(Err(Ok(()))) => 7,
+        Err(Err(Err(()))) => 8,
+    }
+}
+
+//! > function_name
+foo
+
+//! > module_code
+type A = Result<B, B>;
+type B = Result<C, C>;
+type C = Result<(), ()>;
+
+//! > semantic_diagnostics
+
+//! > lowering_diagnostics
+error: Match is non-exhaustive: `Ok(Err(_))` not covered.
+ --> lib.cairo:5:5-14:5
+      match a {
+ _____^
+| ...
+|     }
+|_____^
+
+//! > lowering_flat
+<Failed lowering function - run with RUST_LOG=warn (or less) to see diagnostics>
+
+//! > ==========================================================================
+
+//! > Match on 3 level enum variants with a missing pattern on variant in top type.
+
+//! > test_runner_name
+test_function_lowering(expect_diagnostics: true)
+
+//! > function
+fn foo(a: A) -> felt252 {
+    match a {
+        // Ok(Ok(Ok(()))) => 1,
+        // Ok(Ok(Err(()))) => 2,
+        // Ok(Err(Ok(()))) => 3,
+        // Ok(Err(Err(()))) => 4,
+        Err(Ok(Ok(()))) => 5,
+        Err(Ok(Err(()))) => 6,
+        Err(Err(Ok(()))) => 7,
+        Err(Err(Err(()))) => 8,
+    }
+}
+
+//! > function_name
+foo
+
+//! > module_code
+type A = Result<B, B>;
+type B = Result<C, C>;
+type C = Result<(), ()>;
+
+//! > semantic_diagnostics
+
+//! > lowering_diagnostics
+error: Match is non-exhaustive: `Ok(_)` not covered.
+ --> lib.cairo:5:5-14:5
+      match a {
+ _____^
+| ...
+|     }
+|_____^
+
+//! > lowering_flat
+<Failed lowering function - run with RUST_LOG=warn (or less) to see diagnostics>
+
+//! > ==========================================================================
+
+//! > Match on 3 level enum variants with a single variant.
+
+//! > test_runner_name
+test_function_lowering(expect_diagnostics: false)
+
+//! > function
+fn foo(c: C) -> felt252 {
+    match c {
+        C::One(B::One(A::One)) => 1,
+    }
+}
+
+//! > function_name
+foo
+
+//! > module_code
+#[derive(Drop)]
+enum A {
+    One: (),
+}
+
+#[derive(Drop)]
+enum B {
+    One: A,
+}
+
+#[derive(Drop)]
+enum C {
+    One: B,
+}
+
+//! > semantic_diagnostics
+
+//! > lowering_diagnostics
+
+//! > lowering_flat
+Parameters: v0: test::C
+blk0 (root):
+Statements:
+  (v1: core::felt252) <- 1
+End:
+  Return(v1)
+
+//! > ==========================================================================
+
+//! > Match on enum variants and bind vars from different enum types.
+
+//! > test_runner_name
+test_function_lowering(expect_diagnostics: false)
+
+//! > function
+fn foo(c: C) -> felt252 {
+    match c {
+        C::One(B::One(A::One(x))) | C::One(B::Two(x)) => x + x,
+    }
+}
+
+//! > function_name
+foo
+
+//! > module_code
+enum A {
+    One: felt252,
+}
+
+enum B {
+    One: A,
+    Two: felt252,
+}
+
+enum C {
+    One: B,
+}
+
+//! > semantic_diagnostics
+
+//! > lowering_diagnostics
+
+//! > lowering_flat
+Parameters: v0: test::C
+blk0 (root):
+Statements:
+End:
+  Match(match_enum(v0) {
+    C::One(v1) => blk1,
+  })
+
+blk1:
+Statements:
+End:
+  Match(match_enum(v1) {
+    B::One(v2) => blk2,
+    B::Two(v3) => blk4,
+  })
+
+blk2:
+Statements:
+End:
+  Match(match_enum(v2) {
+    A::One(v4) => blk3,
+  })
+
+blk3:
+Statements:
+End:
+  Goto(blk5, {v4 -> v5})
+
+blk4:
+Statements:
+End:
+  Goto(blk5, {v3 -> v5})
+
+blk5:
+Statements:
+  (v6: core::felt252) <- core::felt252_add(v5, v5)
+End:
+  Return(v6)
+
+//! > ==========================================================================
+
+//! > Match on enum variants and bind vars from a tuple.
+
+//! > test_runner_name
+test_function_lowering(expect_diagnostics: false)
+
+//! > function
+fn foo(b: B) -> felt252 {
+    match b {
+        B::One(A::One((x, _))) => x,
+    }
+}
+
+//! > function_name
+foo
+
+//! > module_code
+enum A {
+    One: (felt252, felt252),
+}
+
+enum B {
+    One: A,
+}
+
+//! > semantic_diagnostics
+
+//! > lowering_diagnostics
+
+//! > lowering_flat
+Parameters: v0: test::B
+blk0 (root):
+Statements:
+End:
+  Match(match_enum(v0) {
+    B::One(v1) => blk1,
+  })
+
+blk1:
+Statements:
+End:
+  Match(match_enum(v1) {
+    A::One(v2) => blk2,
+  })
+
+blk2:
+Statements:
+  (v3: core::felt252, v4: core::felt252) <- struct_destructure(v2)
+End:
+  Return(v3)
+
+//! > ==========================================================================
+
+//! > Match on enum with snapshots in types.
+
+//! > test_runner_name
+test_function_lowering(expect_diagnostics: false)
+
+//! > function
+fn foo(x: @B) -> felt252 {
+    match x {
+        B::Two(A::One(v)) => *****v,
+    }
+}
+
+//! > function_name
+foo
+
+//! > module_code
+enum A {
+    One: @felt252,
+}
+
+enum B {
+    Two: @@@A,
+}
+
+//! > semantic_diagnostics
+
+//! > lowering_diagnostics
+
+//! > lowering_flat
+Parameters: v0: @test::B
+blk0 (root):
+Statements:
+End:
+  Match(match_enum(v0) {
+    B::Two(v1) => blk1,
+  })
+
+blk1:
+Statements:
+End:
+  Match(match_enum(v1) {
+    A::One(v2) => blk2,
+  })
+
+blk2:
+Statements:
+  (v3: @@@@core::felt252) <- desnap(v2)
+  (v4: @@@core::felt252) <- desnap(v3)
+  (v5: @@core::felt252) <- desnap(v4)
+  (v6: @core::felt252) <- desnap(v5)
+  (v7: core::felt252) <- desnap(v6)
+End:
+  Return(v7)
+
+//! > ==========================================================================
+
+//! > Test extern to inner match arm.
+
+//! > test_runner_name
+test_function_lowering(expect_diagnostics: false)
+
+//! > function
+fn foo() -> felt252 {
+    match get_a() {
+        A::One(Some(Some(v))) => v,
+        _ => 3,
+    }
+}
+
+//! > function_name
+foo
+
+//! > module_code
+enum A {
+    One: Option<Option<felt252>>,
+}
+
+extern fn get_a() -> A nopanic;
+
+//! > semantic_diagnostics
+
+//! > lowering_diagnostics
+
+//! > lowering_flat
+Parameters:
+blk0 (root):
+Statements:
+End:
+  Match(match test::get_a() {
+    A::One(v0) => blk1,
+  })
+
+blk1:
+Statements:
+End:
+  Match(match_enum(v0) {
+    Option::Some(v1) => blk2,
+    Option::None(v2) => blk5,
+  })
+
+blk2:
+Statements:
+End:
+  Match(match_enum(v1) {
+    Option::Some(v3) => blk3,
+    Option::None(v4) => blk4,
+  })
+
+blk3:
+Statements:
+End:
+  Return(v3)
+
+blk4:
+Statements:
+End:
+  Goto(blk6, {})
+
+blk5:
+Statements:
+End:
+  Goto(blk6, {})
+
+blk6:
+Statements:
+  (v5: core::felt252) <- 3
+End:
+  Return(v5)
+
+//! > ==========================================================================
+
+//! > Test extern to inner match arm with snapshots.
+
+//! > test_runner_name
+test_function_lowering(expect_diagnostics: false)
+
+//! > function
+fn foo() -> felt252 {
+    match @get_a() {
+        A::One(Some(Some(v))) => *****v,
+        _ => 3,
+    }
+}
+
+//! > function_name
+foo
+
+//! > module_code
+#[derive(Drop)]
+enum A {
+    One: @Option<@@Option<@felt252>>,
+}
+
+extern fn get_a() -> A nopanic;
+
+//! > semantic_diagnostics
+
+//! > lowering_diagnostics
+
+//! > lowering_flat
+Parameters:
+blk0 (root):
+Statements:
+End:
+  Match(match test::get_a() {
+    A::One(v0) => blk1,
+  })
+
+blk1:
+Statements:
+  (v1: @core::option::Option::<@@core::option::Option::<@core::felt252>>, v2: @@core::option::Option::<@@core::option::Option::<@core::felt252>>) <- snapshot(v0)
+End:
+  Match(match_enum(v2) {
+    Option::Some(v3) => blk2,
+    Option::None(v4) => blk5,
+  })
+
+blk2:
+Statements:
+End:
+  Match(match_enum(v3) {
+    Option::Some(v5) => blk3,
+    Option::None(v6) => blk4,
+  })
+
+blk3:
+Statements:
+  (v7: @@@@core::felt252) <- desnap(v5)
+  (v8: @@@core::felt252) <- desnap(v7)
+  (v9: @@core::felt252) <- desnap(v8)
+  (v10: @core::felt252) <- desnap(v9)
+  (v11: core::felt252) <- desnap(v10)
+End:
+  Return(v11)
+
+blk4:
+Statements:
+End:
+  Goto(blk6, {})
+
+blk5:
+Statements:
+End:
+  Goto(blk6, {})
+
+blk6:
+Statements:
+  (v12: core::felt252) <- 3
+End:
+  Return(v12)
+
+//! > ==========================================================================
+
+//! > Test enum match after destruct disallowed.
+
+//! > test_runner_name
+test_function_lowering(expect_diagnostics: false)
+
+//! > function
+fn foo(x: Option<Option<A>>) -> felt252 {
+    match x {
+        Some(Some(A { opt: Some(v) })) => v,
+        _ => 3,
+    }
+}
+
+//! > function_name
+foo
+
+//! > module_code
+#[derive(Drop)]
+struct A {
+    opt: Option<felt252>,
+}
+
+//! > semantic_diagnostics
+
+//! > lowering_diagnostics
+
+//! > lowering_flat
+Parameters: v0: core::option::Option::<core::option::Option::<test::A>>
+blk0 (root):
+Statements:
+End:
+  Match(match_enum(v0) {
+    Option::Some(v1) => blk1,
+    Option::None(v2) => blk6,
+  })
+
+blk1:
+Statements:
+End:
+  Match(match_enum(v1) {
+    Option::Some(v3) => blk2,
+    Option::None(v4) => blk5,
+  })
+
+blk2:
+Statements:
+  (v5: core::option::Option::<core::felt252>) <- struct_destructure(v3)
+End:
+  Match(match_enum(v5) {
+    Option::Some(v6) => blk3,
+    Option::None(v7) => blk4,
+  })
+
+blk3:
+Statements:
+End:
+  Return(v6)
+
+blk4:
+Statements:
+End:
+  Goto(blk7, {})
+
+blk5:
+Statements:
+End:
+  Goto(blk7, {})
+
+blk6:
+Statements:
+End:
+  Goto(blk7, {})
+
+blk7:
+Statements:
+  (v8: core::felt252) <- 3
+End:
+  Return(v8)
+
+//! > ==========================================================================
+
+//! > Test value match after enum match.
+
+//! > test_runner_name
+test_function_lowering(expect_diagnostics: false)
+
+//! > function
+fn foo(x: Option<Option<felt252>>) -> felt252 {
+    match x {
+        Some(Some(0)) => 0,
+        _ => 3,
+    }
+}
+
+//! > function_name
+foo
+
+//! > module_code
+#[derive(Drop)]
+struct A {
+    opt: Option<felt252>,
+}
+
+//! > semantic_diagnostics
+
+//! > lowering_diagnostics
+
+//! > lowering_flat
+Parameters: v0: core::option::Option::<core::option::Option::<core::felt252>>
+blk0 (root):
+Statements:
+End:
+  Match(match_enum(v0) {
+    Option::Some(v1) => blk1,
+    Option::None(v2) => blk6,
+  })
+
+blk1:
+Statements:
+End:
+  Match(match_enum(v1) {
+    Option::Some(v3) => blk2,
+    Option::None(v4) => blk5,
+  })
+
+blk2:
+Statements:
+End:
+  Match(match core::felt252_is_zero(v3) {
+    IsZeroResult::Zero => blk3,
+    IsZeroResult::NonZero(v5) => blk4,
+  })
+
+blk3:
+Statements:
+  (v6: core::felt252) <- 0
+End:
+  Return(v6)
+
+blk4:
+Statements:
+End:
+  Goto(blk7, {})
+
+blk5:
+Statements:
+End:
+  Goto(blk7, {})
+
+blk6:
+Statements:
+End:
+  Goto(blk7, {})
+
+blk7:
+Statements:
+  (v7: core::felt252) <- 3
+End:
+  Return(v7)
+
+//! > ==========================================================================
+
+//! > Test lowering of empty extern enum.
+
+//! > test_runner_name
+test_function_lowering(expect_diagnostics: false)
+
+//! > function
+fn foo() -> felt252 {
+    match get_a() {}
+}
+
+//! > function_name
+foo
+
+//! > module_code
+enum A {}
+
+extern fn get_a() -> A nopanic;
+
+//! > semantic_diagnostics
+
+//! > lowering_diagnostics
+
+//! > lowering_flat
+Parameters:
+blk0 (root):
+Statements:
+End:
+  Match(match test::get_a() {
+  })

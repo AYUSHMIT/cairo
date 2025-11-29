@@ -15,7 +15,7 @@
 
 [![GitHub Workflow Status](https://github.com/starkware-libs/cairo/actions/workflows/ci.yml/badge.svg)](https://github.com/starkware-libs/cairo/actions/workflows/ci.yml)
 [![Project license](https://img.shields.io/github/license/starkware-libs/cairo.svg?style=flat-square)](LICENSE)
-[![Pull Requests welcome](https://img.shields.io/badge/PRs-welcome-ff69b4.svg?style=flat-square)](https://github.com/starkware-libs/cairo/issues?q=is%3Aissue+is%3Aopen+label%3A%22help+wanted%22)
+[![Pull Requests welcome](https://img.shields.io/badge/PRs-welcome-ff69b4.svg?style=flat-square)](https://github.com/starkware-libs/cairo/blob/main/docs/CONTRIBUTING.md)
 
 </div>
 
@@ -27,8 +27,6 @@
   - [Prerequisites](#prerequisites)
   - [Compiling and running Cairo files](#compiling-and-running-cairo-files)
   - [Compiling Starknet Contracts](#compiling-starknet-contracts)
-  - [Development](#development)
-    - [Install the language server](#install-the-language-server)
 - [Roadmap](#roadmap)
 - [Support](#support)
 - [Project assistance](#project-assistance)
@@ -55,7 +53,7 @@ Cairo is the first Turing-complete language for creating provable programs for g
 rustup override set stable && rustup update
 ```
 
-Ensure rust was installed correctly by running the following from the root project directory:
+Ensure Rust was installed correctly by running the following from the root project directory:
 ```bash
 cargo test
 ```
@@ -105,7 +103,7 @@ You can track the exact progress [here](./docs/FEATURE_PARITY.md).
 
 ## Support
 
-- We encourage developers to ask and answer questions on [stackoverflow](https://stackoverflow.com/questions/tagged/cairo-lang).
+- We encourage developers to ask and answer questions on [Stack Overflow](https://stackoverflow.com/questions/tagged/cairo-lang).
 - Contact options listed on [this GitHub profile](https://github.com/starkware-libs)
 
 ## Project assistance

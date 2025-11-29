@@ -1,15 +1,6 @@
-#[cfg(not(feature = "std"))]
-pub use alloc::borrow::ToOwned;
-#[cfg(not(feature = "std"))]
-use alloc::{string::String, vec, vec::Vec};
-#[cfg(feature = "std")]
-pub use std::borrow::ToOwned;
-
 use cairo_lang_utils::casts::IntoOrPanic;
 use cairo_lang_utils::extract_matches;
-use cairo_lang_utils::ordered_hash_map::OrderedHashMap;
-use cairo_lang_utils::unordered_hash_map::{Entry, UnorderedHashMap};
-use cairo_lang_utils::unordered_hash_set::UnorderedHashSet;
+use cairo_lang_utils::small_ordered_map::{Entry, SmallOrderedMap};
 use num_bigint::BigInt;
 use num_traits::{One, Zero};
 
@@ -18,8 +9,8 @@ use crate::cell_expression::{CellExpression, CellOperator};
 use crate::deref_or_immediate;
 use crate::hints::Hint;
 use crate::instructions::{
-    AddApInstruction, AssertEqInstruction, CallInstruction, Instruction, InstructionBody,
-    JnzInstruction, JumpInstruction, RetInstruction,
+    AddApInstruction, AssertEqInstruction, Blake2sCompressInstruction, CallInstruction,
+    Instruction, InstructionBody, JnzInstruction, JumpInstruction, RetInstruction,
 };
 use crate::operand::{BinOpOperand, CellRef, DerefOrImmediate, Operation, Register, ResOperand};
 
@@ -27,20 +18,28 @@ use crate::operand::{BinOpOperand, CellRef, DerefOrImmediate, Operation, Registe
 #[path = "builder_test.rs"]
 mod test;
 
-/// Variables for casm builder, representing a `CellExpression`.
+/// Variables for CASM builder, representing a `CellExpression`.
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub struct Var(usize);
 
+/// The kind of an assert_eq action.
+///
+/// To be used in `assert_vars_eq`.
+pub enum AssertEqKind {
+    Felt252,
+    QM31,
+}
+
 /// The state of the variables at some line.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default)]
 pub struct State {
     /// The value per variable.
-    vars: OrderedHashMap<Var, CellExpression>,
+    vars: SmallOrderedMap<Var, CellExpression>,
     /// The number of allocated variables from the beginning of the run.
     allocated: i16,
     /// The AP change since the beginning of the run.
     pub ap_change: usize,
-    /// The number of casm steps since the beginning of the run.
+    /// The number of CASM steps since the beginning of the run.
     pub steps: usize,
 }
 impl State {
@@ -100,30 +99,36 @@ enum Statement {
     /// A final instruction, no need for further editing.
     Final(Instruction),
     /// A jump or call command, requires fixing the actual target label.
-    Jump(String, Instruction),
+    Jump(&'static str, Instruction),
     /// A target label for jumps, additionally with an offset for defining the label in a position
     /// relative to the current statement.
-    Label(String, usize),
+    Label(&'static str, usize),
 }
 
 /// The builder result.
 pub struct CasmBuildResult<const BRANCH_COUNT: usize> {
-    /// The actual casm code.
+    /// The actual CASM code.
     pub instructions: Vec<Instruction>,
     /// The state and relocations per branch.
     pub branches: [(State, Vec<usize>); BRANCH_COUNT],
 }
 
-/// Builder to more easily write casm code.
+/// Information about the state of a label.
+struct LabelInfo {
+    /// The state at a point of jumping into the label.
+    state: State,
+    /// Whether the label state is read-only.
+    read_only: bool,
+}
+
+/// Builder to more easily write CASM code.
 ///
 /// Allows CASM building without specifically thinking about ap changes and the sizes of opcodes.
 /// Wrong usages of it would panic instead of returning a result, as this builder assumes we are in
 /// a post validation of parameters stage.
 pub struct CasmBuilder {
-    /// The state at a point of jumping into a label, per label.
-    label_state: UnorderedHashMap<String, State>,
-    /// The set of labels that were already read, so cannot be updated.
-    read_labels: UnorderedHashSet<String>,
+    /// The information about the labels, per label.
+    label_info: SmallOrderedMap<&'static str, LabelInfo>,
     /// The state at the last added statement.
     main_state: State,
     /// The added statements.
@@ -133,7 +138,7 @@ pub struct CasmBuilder {
     /// The number of vars created. Used to not reuse var names.
     var_count: usize,
     /// Is the current state reachable.
-    /// Example for unreachable state is after a unconditional jump, before any label is stated.
+    /// Example for unreachable state is after an unconditional jump, before any label is stated.
     reachable: bool,
 }
 impl CasmBuilder {
@@ -149,10 +154,11 @@ impl CasmBuilder {
         );
         let label_offsets = self.compute_label_offsets();
         if self.reachable {
-            self.label_state.insert("Fallthrough".to_owned(), self.main_state);
+            self.label_info
+                .insert("Fallthrough", LabelInfo { state: self.main_state, read_only: false });
         }
         let mut instructions = vec![];
-        let mut branch_relocations = UnorderedHashMap::<String, Vec<usize>>::default();
+        let mut branch_relocations: [Vec<usize>; BRANCH_COUNT] = core::array::from_fn(|_| vec![]);
         let mut offset = 0;
         for statement in self.statements {
             match statement {
@@ -183,27 +189,28 @@ impl CasmBuilder {
                             _ => unreachable!("Only jump or call statements should be here."),
                         },
                         None => {
-                            branch_relocations.entry(label).or_default().push(instructions.len())
+                            let idx = branch_names.iter().position(|name| name == &label).unwrap();
+                            branch_relocations[idx].push(instructions.len())
                         }
                     }
                     offset += inst.body.op_size();
                     instructions.push(inst);
                 }
                 Statement::Label(name, _) => {
-                    self.label_state.remove(&name);
+                    self.label_info.remove(&name);
                 }
             }
         }
-        let branches = branch_names.map(|label| {
-            let state = self
-                .label_state
-                .remove(label)
+        let branches = core::array::from_fn(|i| {
+            let label = branch_names[i];
+            let info = self
+                .label_info
+                .remove(&label)
                 .unwrap_or_else(|| panic!("Requested a non existing final label: {label:?}."));
-            state.validate_finality();
-            (state, branch_relocations.remove(label).unwrap_or_default())
+            info.state.validate_finality();
+            (info.state, core::mem::take(&mut branch_relocations[i]))
         });
-        assert!(self.label_state.is_empty(), "Did not use all branches.");
-        assert!(branch_relocations.is_empty(), "Did not use all branch relocations.");
+        assert!(self.label_info.is_empty(), "Did not use all branches.");
         CasmBuildResult { instructions, branches }
     }
 
@@ -214,8 +221,8 @@ impl CasmBuilder {
     }
 
     /// Computes the code offsets of all the labels.
-    fn compute_label_offsets(&self) -> UnorderedHashMap<String, usize> {
-        let mut label_offsets = UnorderedHashMap::default();
+    fn compute_label_offsets(&self) -> SmallOrderedMap<&'static str, usize> {
+        let mut label_offsets = SmallOrderedMap::default();
         let mut offset = 0;
         for statement in &self.statements {
             match statement {
@@ -223,7 +230,7 @@ impl CasmBuilder {
                     offset += inst.body.op_size();
                 }
                 Statement::Label(name, extra_offset) => {
-                    label_offsets.insert(name.clone(), offset + extra_offset);
+                    label_offsets.insert(*name, offset + extra_offset);
                 }
             }
         }
@@ -294,7 +301,7 @@ impl CasmBuilder {
 
     /// Adds an assertion that `dst = res`.
     /// `dst` must be a cell reference.
-    pub fn assert_vars_eq(&mut self, dst: Var, res: Var) {
+    pub fn assert_vars_eq(&mut self, dst: Var, res: Var, kind: AssertEqKind) {
         let a = self.as_cell_ref(dst, true);
         let b = self.get_value(res, true);
         let (a, b) = match b {
@@ -316,8 +323,14 @@ impl CasmBuilder {
                 }
             },
         };
-        let instruction =
-            self.next_instruction(InstructionBody::AssertEq(AssertEqInstruction { a, b }), true);
+        let inner = AssertEqInstruction { a, b };
+        let instruction = self.next_instruction(
+            match kind {
+                AssertEqKind::Felt252 => InstructionBody::AssertEq(inner),
+                AssertEqKind::QM31 => InstructionBody::QM31AssertEq(inner),
+            },
+            true,
+        );
         self.statements.push(Statement::Final(instruction));
     }
 
@@ -328,7 +341,7 @@ impl CasmBuilder {
     pub fn buffer_write_and_inc(&mut self, buffer: Var, value: Var) {
         let (cell, offset) = self.buffer_get_and_inc(buffer);
         let location = self.add_var(CellExpression::DoubleDeref(cell, offset));
-        self.assert_vars_eq(value, location);
+        self.assert_vars_eq(value, location, AssertEqKind::Felt252);
     }
 
     /// Writes `var` as a new tempvar and returns it as a variable, unless its value is already
@@ -349,7 +362,7 @@ impl CasmBuilder {
             } if imm.value.is_one() => a,
             _ => {
                 let temp = self.alloc_var(false);
-                self.assert_vars_eq(temp, var);
+                self.assert_vars_eq(temp, var, AssertEqKind::Felt252);
                 return temp;
             }
         }))
@@ -358,11 +371,14 @@ impl CasmBuilder {
     /// Increments a buffer and allocates and returns variable pointing to its previous value.
     pub fn get_ref_and_inc(&mut self, buffer: Var) -> Var {
         let (cell, offset) = self.as_cell_ref_plus_const(buffer, 0, false);
-        self.main_state.vars.insert(buffer, CellExpression::BinOp {
-            op: CellOperator::Add,
-            a: cell,
-            b: deref_or_immediate!(BigInt::from(offset) + 1),
-        });
+        self.main_state.vars.insert(
+            buffer,
+            CellExpression::BinOp {
+                op: CellOperator::Add,
+                a: cell,
+                b: deref_or_immediate!(BigInt::from(offset) + 1),
+            },
+        );
         self.add_var(CellExpression::DoubleDeref(cell, offset))
     }
 
@@ -379,11 +395,14 @@ impl CasmBuilder {
             } => (a, imm.value.try_into().expect("Too many buffer writes.")),
             _ => panic!("Not a valid buffer."),
         };
-        self.main_state.vars.insert(buffer, CellExpression::BinOp {
-            op: CellOperator::Add,
-            a: base,
-            b: deref_or_immediate!(offset + 1),
-        });
+        self.main_state.vars.insert(
+            buffer,
+            CellExpression::BinOp {
+                op: CellOperator::Add,
+                a: base,
+                b: deref_or_immediate!(offset + 1),
+            },
+        );
         (base, offset)
     }
 
@@ -439,20 +458,20 @@ impl CasmBuilder {
 
     /// Sets the label to have the set states, otherwise tests if the state matches the existing one
     /// by merging.
-    fn set_or_test_label_state(&mut self, label: String, state: State) {
-        match self.label_state.entry(label) {
+    fn set_or_test_label_state(&mut self, label: &'static str, state: State) {
+        match self.label_info.entry(label) {
             Entry::Occupied(e) => {
-                let read_only = self.read_labels.contains(e.key());
-                e.into_mut().intersect(&state, read_only);
+                let info = e.into_mut();
+                info.state.intersect(&state, info.read_only);
             }
             Entry::Vacant(e) => {
-                e.insert(state);
+                e.insert(LabelInfo { state, read_only: false });
             }
         }
     }
 
     /// Add a statement to jump to `label`.
-    pub fn jump(&mut self, label: String) {
+    pub fn jump(&mut self, label: &'static str) {
         let instruction = self.next_instruction(
             InstructionBody::Jump(JumpInstruction {
                 target: deref_or_immediate!(0),
@@ -460,7 +479,7 @@ impl CasmBuilder {
             }),
             true,
         );
-        self.statements.push(Statement::Jump(label.clone(), instruction));
+        self.statements.push(Statement::Jump(label, instruction));
         let mut state = State::default();
         core::mem::swap(&mut state, &mut self.main_state);
         self.set_or_test_label_state(label, state);
@@ -469,7 +488,7 @@ impl CasmBuilder {
 
     /// Add a statement to jump to `label` if `condition != 0`.
     /// `condition` must be a cell reference.
-    pub fn jump_nz(&mut self, condition: Var, label: String) {
+    pub fn jump_nz(&mut self, condition: Var, label: &'static str) {
         let cell = self.as_cell_ref(condition, true);
         let instruction = self.next_instruction(
             InstructionBody::Jnz(JnzInstruction {
@@ -478,28 +497,54 @@ impl CasmBuilder {
             }),
             true,
         );
-        self.statements.push(Statement::Jump(label.clone(), instruction));
+        self.statements.push(Statement::Jump(label, instruction));
         self.set_or_test_label_state(label, self.main_state.clone());
     }
 
+    /// Add a statement performing Blake2s compression.
+    ///
+    /// `state` must be a cell reference to a pointer to `[u32; 8]` as the hash state.
+    /// `byte_count` must be a cell reference to the number of bytes in the message.
+    /// `message` must be a cell reference to a pointer to `[u32; 16]` as the message.
+    /// `finalize` should be `true` if this is the final compression.
+    ///
+    /// Additionally the pointer to the output hash state should be on the top of the stack.
+    pub fn blake2s_compress(&mut self, state: Var, byte_count: Var, message: Var, finalize: bool) {
+        let instruction = self.next_instruction(
+            InstructionBody::Blake2sCompress(Blake2sCompressInstruction {
+                state: self.as_cell_ref(state, true),
+                byte_count: self.as_cell_ref(byte_count, true),
+                message: self.as_cell_ref(message, true),
+                finalize,
+            }),
+            true,
+        );
+        assert!(instruction.inc_ap);
+        assert_eq!(
+            self.main_state.allocated as usize, self.main_state.ap_change,
+            "Output var must be top of stack"
+        );
+        self.statements.push(Statement::Final(instruction));
+    }
+
     /// Adds a label here named `name`.
-    pub fn label(&mut self, name: String) {
+    pub fn label(&mut self, name: &'static str) {
         if self.reachable {
-            self.set_or_test_label_state(name.clone(), self.main_state.clone());
+            self.set_or_test_label_state(name, self.main_state.clone());
         }
-        self.read_labels.insert(name.clone());
-        self.main_state = self
-            .label_state
-            .get(&name)
-            .unwrap_or_else(|| panic!("No known value for state on reaching {name}."))
-            .clone();
+        let info = self
+            .label_info
+            .get_mut(&name)
+            .unwrap_or_else(|| panic!("No known value for state on reaching {name}."));
+        info.read_only = true;
+        self.main_state = info.state.clone();
         self.statements.push(Statement::Label(name, 0));
         self.reachable = true;
     }
 
     /// Adds a label `name` in distance `offset` from the current point.
     /// Useful for calling code outside of the builder's context.
-    pub fn future_label(&mut self, name: String, offset: usize) {
+    pub fn future_label(&mut self, name: &'static str, offset: usize) {
         self.statements.push(Statement::Label(name, offset));
     }
 
@@ -517,12 +562,12 @@ impl CasmBuilder {
 
     /// Adds a call command to 'label'. All AP based variables are passed to the called function
     /// state and dropped from the calling function state.
-    pub fn call(&mut self, label: String) {
+    pub fn call(&mut self, label: &'static str) {
         self.main_state.validate_finality();
         // Vars to be passed to the called function state.
-        let mut function_vars = OrderedHashMap::<Var, CellExpression>::default();
+        let mut function_vars = SmallOrderedMap::<Var, CellExpression>::default();
         // FP based vars which will remain in the current state.
-        let mut main_vars = OrderedHashMap::<Var, CellExpression>::default();
+        let mut main_vars = SmallOrderedMap::<Var, CellExpression>::default();
         let ap_change = self.main_state.ap_change;
         let cell_to_var_flags = |cell: &CellRef| {
             if cell.register == Register::AP { (true, false) } else { (false, true) }
@@ -576,7 +621,7 @@ impl CasmBuilder {
             }),
             false,
         );
-        self.statements.push(Statement::Jump(label.clone(), instruction));
+        self.statements.push(Statement::Jump(label, instruction));
 
         self.main_state.vars = main_vars;
         self.main_state.allocated = 0;
@@ -689,8 +734,7 @@ impl CasmBuilder {
 impl Default for CasmBuilder {
     fn default() -> Self {
         Self {
-            label_state: Default::default(),
-            read_labels: Default::default(),
+            label_info: Default::default(),
             main_state: Default::default(),
             statements: Default::default(),
             current_hints: Default::default(),
@@ -702,195 +746,195 @@ impl Default for CasmBuilder {
 
 #[macro_export]
 macro_rules! casm_build_extend {
-    ($builder:ident,) => {};
-    ($builder:ident, tempvar $var:ident; $($tok:tt)*) => {
+    ($builder:expr,) => {};
+    ($builder:expr, tempvar $var:ident; $($tok:tt)*) => {
         let $var = $builder.alloc_var(false);
         $crate::casm_build_extend!($builder, $($tok)*)
     };
-    ($builder:ident, localvar $var:ident; $($tok:tt)*) => {
+    ($builder:expr, localvar $var:ident; $($tok:tt)*) => {
         let $var = $builder.alloc_var(true);
         $crate::casm_build_extend!($builder, $($tok)*)
     };
-    ($builder:ident, ap += $value:expr; $($tok:tt)*) => {
+    ($builder:expr, ap += $value:expr; $($tok:tt)*) => {
         $builder.add_ap($value);
         $crate::casm_build_extend!($builder, $($tok)*)
     };
-    ($builder:ident, const $imm:ident = $value:expr; $($tok:tt)*) => {
+    ($builder:expr, const $imm:ident = $value:expr; $($tok:tt)*) => {
         let $imm = $builder.add_var($crate::cell_expression::CellExpression::Immediate(($value).into()));
         $crate::casm_build_extend!($builder, $($tok)*)
     };
-    ($builder:ident, assert $dst:ident = $res:ident; $($tok:tt)*) => {
-        $builder.assert_vars_eq($dst, $res);
+    ($builder:expr, assert $dst:ident = $res:ident; $($tok:tt)*) => {
+        $builder.assert_vars_eq($dst, $res, $crate::builder::AssertEqKind::Felt252);
         $crate::casm_build_extend!($builder, $($tok)*)
     };
-    ($builder:ident, assert $dst:ident = $a:ident + $b:ident; $($tok:tt)*) => {
+    ($builder:expr, assert $dst:ident = $a:ident + $b:ident; $($tok:tt)*) => {
         {
             let __sum = $builder.bin_op($crate::cell_expression::CellOperator::Add, $a, $b);
-            $builder.assert_vars_eq($dst, __sum);
+            $builder.assert_vars_eq($dst, __sum, $crate::builder::AssertEqKind::Felt252);
         }
         $crate::casm_build_extend!($builder, $($tok)*)
     };
-    ($builder:ident, assert $dst:ident = $a:ident * $b:ident; $($tok:tt)*) => {
+    ($builder:expr, assert $dst:ident = $a:ident * $b:ident; $($tok:tt)*) => {
         {
             let __product = $builder.bin_op($crate::cell_expression::CellOperator::Mul, $a, $b);
-            $builder.assert_vars_eq($dst, __product);
+            $builder.assert_vars_eq($dst, __product, $crate::builder::AssertEqKind::Felt252);
         }
         $crate::casm_build_extend!($builder, $($tok)*)
     };
-    ($builder:ident, assert $dst:ident = $a:ident - $b:ident; $($tok:tt)*) => {
+    ($builder:expr, assert $dst:ident = $a:ident - $b:ident; $($tok:tt)*) => {
         {
             let __diff = $builder.bin_op($crate::cell_expression::CellOperator::Sub, $a, $b);
-            $builder.assert_vars_eq($dst, __diff);
+            $builder.assert_vars_eq($dst, __diff, $crate::builder::AssertEqKind::Felt252);
         }
         $crate::casm_build_extend!($builder, $($tok)*)
     };
-    ($builder:ident, assert $dst:ident = $a:ident / $b:ident; $($tok:tt)*) => {
+    ($builder:expr, assert $dst:ident = $a:ident / $b:ident; $($tok:tt)*) => {
         {
             let __division = $builder.bin_op($crate::cell_expression::CellOperator::Div, $a, $b);
-            $builder.assert_vars_eq($dst, __division);
+            $builder.assert_vars_eq($dst, __division, $crate::builder::AssertEqKind::Felt252);
         }
         $crate::casm_build_extend!($builder, $($tok)*)
     };
-    ($builder:ident, assert $dst:ident = $buffer:ident [ $offset:expr ] ; $($tok:tt)*) => {
+    ($builder:expr, assert $dst:ident = $buffer:ident [ $offset:expr ] ; $($tok:tt)*) => {
         {
             let __deref = $builder.double_deref($buffer, $offset);
-            $builder.assert_vars_eq($dst, __deref);
+            $builder.assert_vars_eq($dst, __deref, $crate::builder::AssertEqKind::Felt252);
         }
         $crate::casm_build_extend!($builder, $($tok)*)
     };
-    ($builder:ident, assert $dst:ident = * $buffer:ident; $($tok:tt)*) => {
+    ($builder:expr, assert $dst:ident = * $buffer:ident; $($tok:tt)*) => {
         {
             let __deref = $builder.double_deref($buffer, 0);
-            $builder.assert_vars_eq($dst, __deref);
+            $builder.assert_vars_eq($dst, __deref, $crate::builder::AssertEqKind::Felt252);
         }
         $crate::casm_build_extend!($builder, $($tok)*)
     };
-    ($builder:ident, assert $value:ident = * ( $buffer:ident ++ ); $($tok:tt)*) => {
+    ($builder:expr, assert $value:ident = * ( $buffer:ident ++ ); $($tok:tt)*) => {
         $builder.buffer_write_and_inc($buffer, $value);
         $crate::casm_build_extend!($builder, $($tok)*)
     };
-    ($builder:ident, tempvar $var:ident = $value:ident; $($tok:tt)*) => {
+    ($builder:expr, tempvar $var:ident = $value:ident; $($tok:tt)*) => {
         $crate::casm_build_extend!($builder, tempvar $var; assert $var = $value; $($tok)*);
     };
-    ($builder:ident, tempvar $var:ident = $lhs:ident + $rhs:ident; $($tok:tt)*) => {
+    ($builder:expr, tempvar $var:ident = $lhs:ident + $rhs:ident; $($tok:tt)*) => {
         $crate::casm_build_extend!($builder, tempvar $var; assert $var = $lhs + $rhs; $($tok)*);
     };
-    ($builder:ident, tempvar $var:ident = $lhs:ident * $rhs:ident; $($tok:tt)*) => {
+    ($builder:expr, tempvar $var:ident = $lhs:ident * $rhs:ident; $($tok:tt)*) => {
         $crate::casm_build_extend!($builder, tempvar $var; assert $var = $lhs * $rhs; $($tok)*);
     };
-    ($builder:ident, tempvar $var:ident = $lhs:ident - $rhs:ident; $($tok:tt)*) => {
+    ($builder:expr, tempvar $var:ident = $lhs:ident - $rhs:ident; $($tok:tt)*) => {
         $crate::casm_build_extend!($builder, tempvar $var; assert $var = $lhs - $rhs; $($tok)*);
     };
-    ($builder:ident, tempvar $var:ident = $lhs:ident / $rhs:ident; $($tok:tt)*) => {
+    ($builder:expr, tempvar $var:ident = $lhs:ident / $rhs:ident; $($tok:tt)*) => {
         $crate::casm_build_extend!($builder, tempvar $var; assert $var = $lhs / $rhs; $($tok)*);
     };
-    ($builder:ident, tempvar $var:ident = * ( $buffer:ident ++ ); $($tok:tt)*) => {
+    ($builder:expr, tempvar $var:ident = * ( $buffer:ident ++ ); $($tok:tt)*) => {
         $crate::casm_build_extend!($builder, tempvar $var; assert $var = *($buffer++); $($tok)*);
     };
-    ($builder:ident, tempvar $var:ident = $buffer:ident [ $offset:expr ]; $($tok:tt)*) => {
+    ($builder:expr, tempvar $var:ident = $buffer:ident [ $offset:expr ]; $($tok:tt)*) => {
         $crate::casm_build_extend!($builder, tempvar $var; assert $var = $buffer[$offset]; $($tok)*);
     };
-    ($builder:ident, tempvar $var:ident = * $buffer:ident ; $($tok:tt)*) => {
+    ($builder:expr, tempvar $var:ident = * $buffer:ident ; $($tok:tt)*) => {
         $crate::casm_build_extend!($builder, tempvar $var; assert $var = *$buffer; $($tok)*);
     };
-    ($builder:ident, maybe_tempvar $var:ident = $value:ident; $($tok:tt)*) => {
+    ($builder:expr, maybe_tempvar $var:ident = $value:ident; $($tok:tt)*) => {
         let $var = $builder.maybe_add_tempvar($value);
         $crate::casm_build_extend!($builder, $($tok)*);
     };
-    ($builder:ident, maybe_tempvar $var:ident = $lhs:ident + $rhs:ident; $($tok:tt)*) => {
+    ($builder:expr, maybe_tempvar $var:ident = $lhs:ident + $rhs:ident; $($tok:tt)*) => {
         $crate::casm_build_extend! {$builder,
             let $var = $lhs + $rhs;
             maybe_tempvar $var = $var;
             $($tok)*
         };
     };
-    ($builder:ident, maybe_tempvar $var:ident = $lhs:ident * $rhs:ident; $($tok:tt)*) => {
+    ($builder:expr, maybe_tempvar $var:ident = $lhs:ident * $rhs:ident; $($tok:tt)*) => {
         $crate::casm_build_extend! {$builder,
             let $var = $lhs * $rhs;
             maybe_tempvar $var = $var;
             $($tok)*
         };
     };
-    ($builder:ident, maybe_tempvar $var:ident = $lhs:ident - $rhs:ident; $($tok:tt)*) => {
+    ($builder:expr, maybe_tempvar $var:ident = $lhs:ident - $rhs:ident; $($tok:tt)*) => {
         $crate::casm_build_extend! {$builder,
             let $var = $lhs - $rhs;
             maybe_tempvar $var = $var;
             $($tok)*
         };
     };
-    ($builder:ident, maybe_tempvar $var:ident = $lhs:ident / $rhs:ident; $($tok:tt)*) => {
+    ($builder:expr, maybe_tempvar $var:ident = $lhs:ident / $rhs:ident; $($tok:tt)*) => {
         $crate::casm_build_extend! {$builder,
             let $var = $lhs / $rhs;
             maybe_tempvar $var = $var;
             $($tok)*
         };
     };
-    ($builder:ident, localvar $var:ident = $value:ident; $($tok:tt)*) => {
+    ($builder:expr, localvar $var:ident = $value:ident; $($tok:tt)*) => {
         $crate::casm_build_extend!($builder, localvar $var; assert $var = $value; $($tok)*);
     };
-    ($builder:ident, localvar $var:ident = $lhs:ident + $rhs:ident; $($tok:tt)*) => {
+    ($builder:expr, localvar $var:ident = $lhs:ident + $rhs:ident; $($tok:tt)*) => {
         $crate::casm_build_extend!($builder, localvar $var; assert $var = $lhs + $rhs; $($tok)*);
     };
-    ($builder:ident, localvar $var:ident = $lhs:ident * $rhs:ident; $($tok:tt)*) => {
+    ($builder:expr, localvar $var:ident = $lhs:ident * $rhs:ident; $($tok:tt)*) => {
         $crate::casm_build_extend!($builder, localvar $var; assert $var = $lhs * $rhs; $($tok)*);
     };
-    ($builder:ident, localvar $var:ident = $lhs:ident - $rhs:ident; $($tok:tt)*) => {
+    ($builder:expr, localvar $var:ident = $lhs:ident - $rhs:ident; $($tok:tt)*) => {
         $crate::casm_build_extend!($builder, localvar $var; assert $var = $lhs - $rhs; $($tok)*);
     };
-    ($builder:ident, localvar $var:ident = $lhs:ident / $rhs:ident; $($tok:tt)*) => {
+    ($builder:expr, localvar $var:ident = $lhs:ident / $rhs:ident; $($tok:tt)*) => {
         $crate::casm_build_extend!($builder, localvar $var; assert $var = $lhs / $rhs; $($tok)*);
     };
-    ($builder:ident, localvar $var:ident = * ( $buffer:ident ++ ); $($tok:tt)*) => {
+    ($builder:expr, localvar $var:ident = * ( $buffer:ident ++ ); $($tok:tt)*) => {
         $crate::casm_build_extend!($builder, localvar $var; assert $var = *($buffer++); $($tok)*);
     };
-    ($builder:ident, localvar $var:ident = $buffer:ident [ $offset:expr ]; $($tok:tt)*) => {
+    ($builder:expr, localvar $var:ident = $buffer:ident [ $offset:expr ]; $($tok:tt)*) => {
         $crate::casm_build_extend!($builder, localvar $var; assert $var = $buffer[$offset]; $($tok)*);
     };
-    ($builder:ident, localvar $var:ident = * $buffer:ident ; $($tok:tt)*) => {
+    ($builder:expr, localvar $var:ident = * $buffer:ident ; $($tok:tt)*) => {
         $crate::casm_build_extend!($builder, localvar $var; assert $var = *$buffer; $($tok)*);
     };
-    ($builder:ident, let $dst:ident = $a:ident + $b:ident; $($tok:tt)*) => {
+    ($builder:expr, let $dst:ident = $a:ident + $b:ident; $($tok:tt)*) => {
         let $dst = $builder.bin_op($crate::cell_expression::CellOperator::Add, $a, $b);
         $crate::casm_build_extend!($builder, $($tok)*)
     };
-    ($builder:ident, let $dst:ident = $a:ident * $b:ident; $($tok:tt)*) => {
+    ($builder:expr, let $dst:ident = $a:ident * $b:ident; $($tok:tt)*) => {
         let $dst = $builder.bin_op($crate::cell_expression::CellOperator::Mul, $a, $b);
         $crate::casm_build_extend!($builder, $($tok)*)
     };
-    ($builder:ident, let $dst:ident = $a:ident - $b:ident; $($tok:tt)*) => {
+    ($builder:expr, let $dst:ident = $a:ident - $b:ident; $($tok:tt)*) => {
         let $dst = $builder.bin_op($crate::cell_expression::CellOperator::Sub, $a, $b);
         $crate::casm_build_extend!($builder, $($tok)*)
     };
-    ($builder:ident, let $dst:ident = $a:ident / $b:ident; $($tok:tt)*) => {
+    ($builder:expr, let $dst:ident = $a:ident / $b:ident; $($tok:tt)*) => {
         let $dst = $builder.bin_op($crate::cell_expression::CellOperator::Div, $a, $b);
         $crate::casm_build_extend!($builder, $($tok)*)
     };
-    ($builder:ident, let $dst:ident = * ( $buffer:ident ++ ); $($tok:tt)*) => {
+    ($builder:expr, let $dst:ident = * ( $buffer:ident ++ ); $($tok:tt)*) => {
         let $dst = $builder.get_ref_and_inc($buffer);
         $crate::casm_build_extend!($builder, $($tok)*)
     };
-    ($builder:ident, let $dst:ident = $buffer:ident [ $offset:expr ] ; $($tok:tt)*) => {
+    ($builder:expr, let $dst:ident = $buffer:ident [ $offset:expr ] ; $($tok:tt)*) => {
         let $dst = $builder.double_deref($buffer, $offset);
         $crate::casm_build_extend!($builder, $($tok)*)
     };
-    ($builder:ident, let $dst:ident = *$buffer:ident; $($tok:tt)*) => {
+    ($builder:expr, let $dst:ident = *$buffer:ident; $($tok:tt)*) => {
         let $dst = $builder.double_deref($buffer, 0);
         $crate::casm_build_extend!($builder, $($tok)*)
     };
-    ($builder:ident, let $dst:ident = $src:ident; $($tok:tt)*) => {
+    ($builder:expr, let $dst:ident = $src:ident; $($tok:tt)*) => {
         let $dst = $builder.duplicate_var($src);
         $crate::casm_build_extend!($builder, $($tok)*)
     };
-    ($builder:ident, jump $target:ident; $($tok:tt)*) => {
-        $builder.jump($crate::builder::ToOwned::to_owned(core::stringify!($target)));
+    ($builder:expr, jump $target:ident; $($tok:tt)*) => {
+        $builder.jump(core::stringify!($target));
         $crate::casm_build_extend!($builder, $($tok)*)
     };
-    ($builder:ident, jump $target:ident if $condition:ident != 0; $($tok:tt)*) => {
-        $builder.jump_nz($condition, $crate::builder::ToOwned::to_owned(core::stringify!($target)));
+    ($builder:expr, jump $target:ident if $condition:ident != 0; $($tok:tt)*) => {
+        $builder.jump_nz($condition, core::stringify!($target));
         $crate::casm_build_extend!($builder, $($tok)*)
     };
-    ($builder:ident, let ($($var_name:ident),*) = call $target:ident; $($tok:tt)*) => {
-        $builder.call($crate::builder::ToOwned::to_owned(core::stringify!($target)));
+    ($builder:expr, let ($($var_name:ident),*) = call $target:ident; $($tok:tt)*) => {
+        $builder.call(core::stringify!($target));
 
         let __var_count = {0i16 $(+ (stringify!($var_name), 1i16).1)*};
         let mut __var_index = 0;
@@ -903,24 +947,24 @@ macro_rules! casm_build_extend {
         )*
         $crate::casm_build_extend!($builder, $($tok)*)
     };
-    ($builder:ident, ret; $($tok:tt)*) => {
+    ($builder:expr, ret; $($tok:tt)*) => {
         $builder.ret();
         $crate::casm_build_extend!($builder, $($tok)*)
     };
-    ($builder:ident, $label:ident: $($tok:tt)*) => {
-        $builder.label($crate::builder::ToOwned::to_owned(core::stringify!($label)));
+    ($builder:expr, $label:ident: $($tok:tt)*) => {
+        $builder.label(core::stringify!($label));
         $crate::casm_build_extend!($builder, $($tok)*)
     };
-    ($builder:ident, fail; $($tok:tt)*) => {
+    ($builder:expr, fail; $($tok:tt)*) => {
         $builder.fail();
         $crate::casm_build_extend!($builder, $($tok)*)
     };
-    ($builder:ident, unsatisfiable_assert $dst:ident = $res:ident; $($tok:tt)*) => {
+    ($builder:expr, unsatisfiable_assert $dst:ident = $res:ident; $($tok:tt)*) => {
         $crate::casm_build_extend!($builder, assert $dst = $res;);
         $builder.mark_unreachable();
         $crate::casm_build_extend!($builder, $($tok)*)
     };
-    ($builder:ident, hint $hint_head:ident$(::$hint_tail:ident)+ {
+    ($builder:expr, hint $hint_head:ident$(::$hint_tail:ident)+ {
             $($input_name:ident $(: $input_value:ident)?),*
         } into {
             $($output_name:ident $(: $output_value:ident)?),*
@@ -934,37 +978,37 @@ macro_rules! casm_build_extend {
         );
         $crate::casm_build_extend!($builder, $($tok)*)
     };
-    ($builder:ident, hint $hint_name:ident { $($inputs:tt)* } into { $($outputs:tt)* }; $($tok:tt)*) => {
+    ($builder:expr, hint $hint_name:ident { $($inputs:tt)* } into { $($outputs:tt)* }; $($tok:tt)*) => {
         $crate::casm_build_extend! {$builder,
             hint $crate::hints::CoreHint::$hint_name { $($inputs)* } into { $($outputs)* };
             $($tok)*
         }
     };
-    ($builder:ident, hint $hint_head:ident$(::$hint_tail:ident)* { $($inputs:tt)* }; $($tok:tt)*) => {
+    ($builder:expr, hint $hint_head:ident$(::$hint_tail:ident)* { $($inputs:tt)* }; $($tok:tt)*) => {
         $crate::casm_build_extend! {$builder,
             hint $hint_head$(::$hint_tail)* { $($inputs)* } into {};
             $($tok)*
         }
     };
-    ($builder:ident, hint $hint_head:ident$(::$hint_tail:ident)* into { $($outputs:tt)* }; $($tok:tt)*) => {
+    ($builder:expr, hint $hint_head:ident$(::$hint_tail:ident)* into { $($outputs:tt)* }; $($tok:tt)*) => {
         $crate::casm_build_extend! {$builder,
             hint $hint_head$(::$hint_tail)* {} into { $($outputs)* };
             $($tok)*
         }
     };
-    ($builder:ident, rescope { $($new_var:ident = $value_var:ident),* }; $($tok:tt)*) => {
+    ($builder:expr, rescope { $($new_var:ident = $value_var:ident),* }; $($tok:tt)*) => {
         $builder.rescope([$(($new_var, $value_var)),*]);
         $crate::casm_build_extend!($builder, $($tok)*)
     };
-    ($builder:ident, #{ validate steps == $count:expr; } $($tok:tt)*) => {
+    ($builder:expr, #{ validate steps == $count:expr; } $($tok:tt)*) => {
         assert_eq!($builder.steps(), $count);
         $crate::casm_build_extend!($builder, $($tok)*)
     };
-    ($builder:ident, #{ steps = 0; } $($tok:tt)*) => {
+    ($builder:expr, #{ steps = 0; } $($tok:tt)*) => {
         $builder.reset_steps();
         $crate::casm_build_extend!($builder, $($tok)*)
     };
-    ($builder:ident, #{ $counter:ident += steps; steps = 0; } $($tok:tt)*) => {
+    ($builder:expr, #{ $counter:ident += steps; steps = 0; } $($tok:tt)*) => {
         $counter += $builder.steps() as i32;
         $builder.reset_steps();
         $crate::casm_build_extend!($builder, $($tok)*)

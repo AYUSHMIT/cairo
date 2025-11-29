@@ -33,7 +33,7 @@ mod test_contract {
 
 lib.cairo:1:1
 #[starknet::contract]
-^*******************^
+^^^^^^^^^^^^^^^^^^^^^
 contract:
 
 #[event]
@@ -74,10 +74,10 @@ pub struct ContractState {
 }
 
 impl ContractStateDrop of Drop<ContractState> {}
- 
-impl ContractStateDeref of core::ops::SnapshotDeref<ContractState> {
+
+impl ContractStateDeref of core::ops::Deref<@ContractState> {
     type Target = starknet::storage::FlattenedStorage<Storage>;
-    fn snapshot_deref(self: @ContractState) -> starknet::storage::FlattenedStorage<Storage> {
+    fn deref(self: @ContractState) -> starknet::storage::FlattenedStorage<Storage> {
         starknet::storage::FlattenedStorage {}
     }
 }
@@ -105,14 +105,16 @@ pub fn contract_state_for_testing() -> ContractState {
 #[allow(unused_imports)]
 use starknet::storage::Map as LegacyMap;
 #[cfg(target: 'test')]
-pub const TEST_CLASS_HASH: felt252 = 0x32a1956d182625bfe7f9834635d01441624366b326c190ecbf557e699f94b76;
+pub const TEST_CLASS_HASH: starknet::ClassHash = 0x32a1956d182625bfe7f9834635d01441624366b326c190ecbf557e699f94b76.try_into().unwrap();
 
 #[doc(hidden)]
 #[implicit_precedence(core::pedersen::Pedersen, core::RangeCheck, core::integer::Bitwise, core::ec::EcOp, core::poseidon::Poseidon, core::SegmentArena, core::circuit::RangeCheck96, core::circuit::AddMod, core::circuit::MulMod, core::gas::GasBuiltin, System)]
 fn __wrapper__good_l1_handler(mut data: Span::<felt252>) -> Span::<felt252> {
     core::internal::require_implicit::<System>();
     core::internal::revoke_ap_tracking();
-    core::option::OptionTraitImpl::expect(core::gas::withdraw_gas(), 'Out of gas');
+    let Some(_) = core::gas::withdraw_gas() else {
+        core::panic_with_felt252('Out of gas');
+    };
     let __arg_from_address = core::option::OptionTraitImpl::expect(
         core::serde::Serde::<felt252>::deserialize(ref data),
         'Failed to deserialize param #1'
@@ -122,9 +124,9 @@ fn __wrapper__good_l1_handler(mut data: Span::<felt252>) -> Span::<felt252> {
         'Failed to deserialize param #2'
     );
     assert(core::array::SpanTrait::is_empty(data), 'Input too long for arguments');
-    core::option::OptionTraitImpl::expect(
-        core::gas::withdraw_gas_all(core::gas::get_builtin_costs()), 'Out of gas',
-    );
+    let Some(_) = core::gas::withdraw_gas_all(core::gas::get_builtin_costs()) else {
+        core::panic_with_felt252('Out of gas');
+    };
     let mut contract_state = unsafe_new_contract_state();
     good_l1_handler(ref contract_state, __arg_from_address, __arg_arg);
     let mut arr = ArrayTrait::new();
@@ -138,7 +140,9 @@ fn __wrapper__good_l1_handler(mut data: Span::<felt252>) -> Span::<felt252> {
 fn __wrapper__good_l1_handler_ignored(mut data: Span::<felt252>) -> Span::<felt252> {
     core::internal::require_implicit::<System>();
     core::internal::revoke_ap_tracking();
-    core::option::OptionTraitImpl::expect(core::gas::withdraw_gas(), 'Out of gas');
+    let Some(_) = core::gas::withdraw_gas() else {
+        core::panic_with_felt252('Out of gas');
+    };
     let __arg__from_address = core::option::OptionTraitImpl::expect(
         core::serde::Serde::<felt252>::deserialize(ref data),
         'Failed to deserialize param #1'
@@ -148,9 +152,9 @@ fn __wrapper__good_l1_handler_ignored(mut data: Span::<felt252>) -> Span::<felt2
         'Failed to deserialize param #2'
     );
     assert(core::array::SpanTrait::is_empty(data), 'Input too long for arguments');
-    core::option::OptionTraitImpl::expect(
-        core::gas::withdraw_gas_all(core::gas::get_builtin_costs()), 'Out of gas',
-    );
+    let Some(_) = core::gas::withdraw_gas_all(core::gas::get_builtin_costs()) else {
+        core::panic_with_felt252('Out of gas');
+    };
     let mut contract_state = unsafe_new_contract_state();
     good_l1_handler_ignored(ref contract_state, __arg__from_address, __arg_arg);
     let mut arr = ArrayTrait::new();
@@ -160,12 +164,15 @@ fn __wrapper__good_l1_handler_ignored(mut data: Span::<felt252>) -> Span::<felt2
 }
 
 
+#[doc(hidden)]
 pub mod __external {
 }
+#[doc(hidden)]
 pub mod __l1_handler {
     pub use super::__wrapper__good_l1_handler as good_l1_handler;
     pub use super::__wrapper__good_l1_handler_ignored as good_l1_handler_ignored;
 }
+#[doc(hidden)]
 pub mod __constructor {
 }
     impl ContractStateEventEmitter of starknet::event::EventEmitter<
@@ -191,15 +198,15 @@ pub mod __constructor {
 
 lib.cairo:1:1
 #[starknet::contract]
-^*******************^
+^^^^^^^^^^^^^^^^^^^^^
 impls:
 
-impl EventDrop of core::traits::Drop::<Event>;
+impl EventDrop<> of core::traits::Drop::<Event>;
 
 
 lib.cairo:1:1
 #[starknet::contract]
-^*******************^
+^^^^^^^^^^^^^^^^^^^^^
 starknet_derive:
 
 impl EventIsEvent of starknet::Event<Event> {
@@ -221,20 +228,24 @@ impl EventIsEvent of starknet::Event<Event> {
 
 lib.cairo:3:5
     #[storage]
-    ^********^
+    ^^^^^^^^^^
 impls:
 
-impl StorageStorageBaseDrop of core::traits::Drop::<StorageStorageBase>;
-impl StorageStorageBaseCopy of core::traits::Copy::<StorageStorageBase>;
+#[doc(hidden)]
+impl StorageStorageBaseDrop<> of core::traits::Drop::<StorageStorageBase>;
+#[doc(hidden)]
+impl StorageStorageBaseCopy<> of core::traits::Copy::<StorageStorageBase>;
 
 
 lib.cairo:3:5
     #[storage]
-    ^********^
+    ^^^^^^^^^^
 impls:
 
-impl StorageStorageBaseMutDrop of core::traits::Drop::<StorageStorageBaseMut>;
-impl StorageStorageBaseMutCopy of core::traits::Copy::<StorageStorageBaseMut>;
+#[doc(hidden)]
+impl StorageStorageBaseMutDrop<> of core::traits::Drop::<StorageStorageBaseMut>;
+#[doc(hidden)]
+impl StorageStorageBaseMutCopy<> of core::traits::Copy::<StorageStorageBaseMut>;
 
 //! > expected_diagnostics
 
@@ -275,21 +286,24 @@ mod test_contract {
 
 //! > expected_diagnostics
 error: Plugin diagnostic: Contracts must define a 'Storage' struct.
- --> lib.cairo:1:1
-#[starknet::contract]
-^*******************^
+ --> lib.cairo:1:1-11:1
+  #[starknet::contract]
+ _^
+| ...
+| }
+|_^
 
-error: Type not found.
+error[E0006]: Type not found.
  --> lib.cairo:4:39
     fn l1_handler_no_params(ref self: ContractState) {}
-                                      ^***********^
+                                      ^^^^^^^^^^^^^
 
-error: Type not found.
+error[E0006]: Type not found.
  --> lib.cairo:7:52
     fn l1_handler_wrong_first_param_name(ref self: ContractState, abc: felt252) {}
-                                                   ^***********^
+                                                   ^^^^^^^^^^^^^
 
-error: Type not found.
+error[E0006]: Type not found.
  --> lib.cairo:10:52
     fn l1_handler_wrong_first_param_type(ref self: ContractState, from_address: u128) {}
-                                                   ^***********^
+                                                   ^^^^^^^^^^^^^

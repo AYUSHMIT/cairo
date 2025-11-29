@@ -26,8 +26,8 @@ use crate::program::{ConcreteTypeLongId, GenericArg};
 /// Type representing a dictionary from a felt252 to types of size one.
 ///
 /// This is currently only bounded for all numeric types, Nullable, and Enum types with 2 or less
-/// variants, as this are the types that has proper default as 0, and therefore can be properly used
-/// as a value in the dictionary.
+/// variants, as these are the types that has proper default as 0, and therefore can be properly
+/// used as a value in the dictionary.
 #[derive(Default)]
 pub struct Felt252DictTypeWrapped {}
 impl GenericTypeArgGenericType for Felt252DictTypeWrapped {
@@ -124,10 +124,13 @@ impl SignatureOnlyGenericLibfunc for Felt252DictNewLibfunc {
         let segment_arena_ty = context.get_concrete_type(SegmentArenaType::id(), &[])?;
         Ok(LibfuncSignature::new_non_branch_ex(
             vec![ParamSignature::new(segment_arena_ty.clone()).with_allow_add_const()],
-            vec![OutputVarInfo::new_builtin(segment_arena_ty, 0), OutputVarInfo {
-                ty: context.get_wrapped_concrete_type(Felt252DictType::id(), ty)?,
-                ref_info: OutputVarReferenceInfo::Deferred(DeferredOutputKind::Generic),
-            }],
+            vec![
+                OutputVarInfo::new_builtin(segment_arena_ty, 0),
+                OutputVarInfo {
+                    ty: context.get_wrapped_concrete_type(Felt252DictType::id(), ty)?,
+                    ref_info: OutputVarReferenceInfo::Deferred(DeferredOutputKind::Generic),
+                },
+            ],
             SierraApChange::Known { new_vars_only: false },
         ))
     }

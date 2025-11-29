@@ -14,19 +14,19 @@ impl ErrorCode {
     pub const fn new(code: &'static str) -> Self {
         assert!(
             matches!(code.as_bytes(), [b'E', b'0'..=b'9', b'0'..=b'9', b'0'..=b'9', b'0'..=b'9']),
-            "Error codes must start with capital `E` followed by 4 decimal digits."
+            "Error codes must start with a capital `E` followed by 4 decimal digits."
         );
         Self(code)
     }
 
-    /// Format this error code in a way that is suitable for display in error message.
+    /// Format this error code in a way that is suitable for display in an error message.
     ///
     /// ```
     /// # use cairo_lang_diagnostics::error_code;
     /// assert_eq!(error_code!(E0001).display_bracketed(), "[E0001]");
     /// ```
     pub fn display_bracketed(self) -> String {
-        format!("[{}]", self)
+        format!("[{self}]")
     }
 
     pub fn as_str(&self) -> &str {
@@ -63,7 +63,7 @@ pub trait OptionErrorCodeExt {
 }
 
 impl OptionErrorCodeExt for Option<ErrorCode> {
-    /// Format this error code in a way that is suitable for display in error message.
+    /// Formats this error code in a way that is suitable for an error message.
     ///
     /// ```
     /// # use cairo_lang_diagnostics::{error_code, OptionErrorCodeExt};

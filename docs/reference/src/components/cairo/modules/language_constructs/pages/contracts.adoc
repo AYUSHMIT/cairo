@@ -24,14 +24,14 @@ mod my_contract {
 
 A contract is written as an inline module, with designated attributes.
 
-The main attribute is the `#[starknet::contract]` attribute that makes the starknet plugin treat the
+The main attribute is the `#[starknet::contract]` attribute that makes the Starknet plugin treat the
 module as a contract.
 
 == Storage
 
 
-Unlike a Cairo program, which is stateless, a Starknet contract has a state, called “the contract’s
-storage”.
+Unlike a Cairo program, which is stateless, a Starknet contract has a state, called "the contract’s
+storage".
 Transactions invoked on such contracts may modify this state.
 
 In a contract, you can define a struct named `Storage`. The members of this struct are the storage
@@ -75,7 +75,7 @@ Another possibility is to get a read-only reference to the storage:
 ----
     #[external(v0)]
     fn view_example(self: @ContractState) -> felt252 {
-        x::read(value)
+        x::read()
     }
 ----
 This is a view function - it can only read from the storage.
@@ -111,7 +111,7 @@ other functions in the same contract. They are not entry points. For example:
 
 Contract events trigger events on Starknet. They can be triggered by the contract.
 
-The are defined using the `#[event]` attribute on an empty function.
+They are defined using the `#[event]` attribute on an empty function.
 For example:
 [source]
 ----
@@ -124,7 +124,7 @@ For example:
 Each contract has an ABI (Application Binary Interface) that defines:
 
 - The entry points that can be called on it, of the kinds mentioned above.
-- The types in the entry points signatures.
+- The types in the entry point signatures.
 - The contract's events.
 
 

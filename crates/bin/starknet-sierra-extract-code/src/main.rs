@@ -4,10 +4,14 @@ use anyhow::Context;
 use cairo_lang_starknet_classes::contract_class::ContractClass;
 use clap::Parser;
 
-/// Extracts sierra code from a contract class file.
+#[cfg(feature = "mimalloc")]
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
+/// Extracts Sierra code from a contract class file.
 /// Exits with 0/1 if the extraction succeeds/fails.
 #[derive(Parser, Debug)]
-#[clap(version, verbatim_doc_comment)]
+#[command(version, verbatim_doc_comment)]
 struct Args {
     /// The path of the file with the contract class.
     file: String,
@@ -27,7 +31,7 @@ fn main() -> anyhow::Result<()> {
         .with_context(|| "Failed parsing felt252s stream into Sierra program.")?;
     match args.output {
         Some(path) => fs::write(path, sierra_program.to_string())
-            .with_context(|| "Failed to write casm contract.")?,
+            .with_context(|| "Failed to write Sierra program.")?,
         None => println!("{sierra_program}"),
     }
     Ok(())

@@ -7,11 +7,11 @@ pub mod colored_printer;
 pub mod db;
 pub mod diagnostic;
 pub mod lexer;
+pub mod macro_helpers;
 pub mod operators;
 pub mod parser;
 pub mod printer;
 pub mod recovery;
-pub mod types;
 pub mod utils;
 mod validation;
 

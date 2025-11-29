@@ -25,9 +25,10 @@ use cairo_lang_sierra::extensions::felt252_dict::{
 };
 use cairo_lang_sierra::extensions::function_call::SignatureAndFunctionConcreteLibfunc;
 use cairo_lang_sierra::extensions::gas::GasConcreteLibfunc::{
-    BuiltinWithdrawGas, GetAvailableGas, GetBuiltinCosts, RedepositGas, WithdrawGas,
+    BuiltinWithdrawGas, GetAvailableGas, GetBuiltinCosts, GetUnspentGas, RedepositGas, WithdrawGas,
 };
-use cairo_lang_sierra::extensions::gas::{BuiltinCostsType, CostTokenType};
+use cairo_lang_sierra::extensions::gas::{BuiltinCostsType, CostTokenMap, CostTokenType};
+use cairo_lang_sierra::extensions::gas_reserve::GasReserveConcreteLibfunc;
 use cairo_lang_sierra::extensions::int::signed::{SintConcrete, SintTraits};
 use cairo_lang_sierra::extensions::int::signed128::Sint128Concrete;
 use cairo_lang_sierra::extensions::int::unsigned::{UintConcrete, UintTraits};
@@ -42,12 +43,12 @@ use cairo_lang_sierra::extensions::mem::MemConcreteLibfunc::{
 use cairo_lang_sierra::extensions::nullable::NullableConcreteLibfunc;
 use cairo_lang_sierra::extensions::pedersen::PedersenConcreteLibfunc;
 use cairo_lang_sierra::extensions::poseidon::PoseidonConcreteLibfunc;
+use cairo_lang_sierra::extensions::qm31::QM31Concrete;
 use cairo_lang_sierra::extensions::range::IntRangeConcreteLibfunc;
 use cairo_lang_sierra::extensions::structure::StructConcreteLibfunc;
-use cairo_lang_sierra::ids::ConcreteTypeId;
-use cairo_lang_sierra::program::Function;
+use cairo_lang_sierra::ids::{ConcreteTypeId, FunctionId};
+use cairo_lang_sierra::program::{Function, StatementIdx};
 use cairo_lang_utils::casts::IntoOrPanic;
-use cairo_lang_utils::ordered_hash_map::OrderedHashMap;
 use itertools::{Itertools, chain};
 use num_bigint::BigInt;
 use num_traits::{One, Zero};
@@ -67,7 +68,7 @@ pub const DICT_SQUASH_UNIQUE_KEY_COST: ConstCost =
 /// The cost per each access to a key after the first access.
 pub const DICT_SQUASH_REPEATED_ACCESS_COST: ConstCost =
     ConstCost { steps: 9, holes: 0, range_checks: 1, range_checks96: 0 };
-/// The cost not dependent on the number of keys and access.
+/// The cost not dependent on the number of keys and accesses.
 pub const DICT_SQUASH_FIXED_COST: ConstCost =
     ConstCost { steps: 57, holes: 0, range_checks: 3, range_checks96: 0 };
 
@@ -75,6 +76,21 @@ pub const DICT_SQUASH_FIXED_COST: ConstCost =
 /// finalization step of the segment arena.
 pub const SEGMENT_ARENA_ALLOCATION_COST: ConstCost =
     ConstCost { steps: 8, holes: 0, range_checks: 0, range_checks96: 0 };
+
+/// The information about a function required for calculating costs.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FunctionCostInfo {
+    /// The id of the function.
+    pub id: FunctionId,
+    /// The entry point of the function.
+    pub entry_point: StatementIdx,
+}
+impl FunctionCostInfo {
+    /// Creates a new [FunctionCostInfo] from a [Function].
+    pub fn new(function: &Function) -> Self {
+        Self { id: function.id.clone(), entry_point: function.entry_point }
+    }
+}
 
 /// The operation required for extracting a libfunc's cost.
 pub trait CostOperations {
@@ -95,7 +111,7 @@ pub trait CostOperations {
     /// Gets a cost for the content of a function.
     fn function_token_cost(
         &mut self,
-        function: &Function,
+        function: &FunctionCostInfo,
         token_type: CostTokenType,
     ) -> Self::CostType;
     /// Gets a cost for a variable for the current statement.
@@ -139,7 +155,7 @@ pub fn core_libfunc_cost(
         FunctionCall(SignatureAndFunctionConcreteLibfunc { function, .. }) => {
             vec![BranchCost::FunctionCost {
                 const_cost: ConstCost::steps(2),
-                function: function.clone(),
+                function: FunctionCostInfo::new(function),
                 sign: BranchCostSign::Subtract,
             }]
         }
@@ -209,7 +225,9 @@ pub fn core_libfunc_cost(
             EcConcreteLibfunc::IsZero(_) => {
                 vec![ConstCost::steps(1).into(), ConstCost::steps(1).into()]
             }
-            EcConcreteLibfunc::Neg(_) => vec![ConstCost::default().into()],
+            EcConcreteLibfunc::Neg(_) | EcConcreteLibfunc::NegNz(_) => {
+                vec![ConstCost::default().into()]
+            }
             EcConcreteLibfunc::StateAdd(_) => vec![ConstCost::steps(10).into()],
             EcConcreteLibfunc::TryNew(_) => {
                 vec![ConstCost::steps(7).into(), ConstCost::steps(7).into()]
@@ -244,6 +262,13 @@ pub fn core_libfunc_cost(
             ],
             RedepositGas(_) => vec![BranchCost::RedepositGas],
             GetAvailableGas(_) => vec![ConstCost::default().into()],
+            GetUnspentGas(_) => vec![
+                ConstCost::steps(
+                    BuiltinCostsType::cost_computation_steps(false, |_| 2).into_or_panic::<i32>()
+                        + 1,
+                )
+                .into(),
+            ],
             BuiltinWithdrawGas(_) => {
                 vec![
                     BranchCost::WithdrawGas(WithdrawGasBranchInfo {
@@ -257,6 +282,13 @@ pub fn core_libfunc_cost(
                 ]
             }
             GetBuiltinCosts(_) => vec![ConstCost::steps(3).into()],
+        },
+        GasReserve(libfunc) => match libfunc {
+            GasReserveConcreteLibfunc::Create(_) => vec![
+                (ConstCost::steps(3) + ConstCost::range_checks(1)).into(),
+                (ConstCost::steps(5) + ConstCost::range_checks(1)).into(),
+            ],
+            GasReserveConcreteLibfunc::Utilize(_) => vec![ConstCost::steps(0).into()],
         },
         BranchAlign(_) => vec![BranchCost::BranchAlign],
         Array(libfunc) => match libfunc {
@@ -321,11 +353,11 @@ pub fn core_libfunc_cost(
         Uint128(libfunc) => u128_libfunc_cost(libfunc),
         Uint256(libfunc) => u256_libfunc_cost(libfunc).into_iter().map(BranchCost::from).collect(),
         Uint512(libfunc) => u512_libfunc_cost(libfunc).into_iter().map(BranchCost::from).collect(),
-        Sint8(libfunc) => sint_libfunc_cost(libfunc).into_iter().map(BranchCost::from).collect(),
-        Sint16(libfunc) => sint_libfunc_cost(libfunc).into_iter().map(BranchCost::from).collect(),
-        Sint32(libfunc) => sint_libfunc_cost(libfunc).into_iter().map(BranchCost::from).collect(),
-        Sint64(libfunc) => sint_libfunc_cost(libfunc).into_iter().map(BranchCost::from).collect(),
-        Sint128(libfunc) => s128_libfunc_cost(libfunc).into_iter().map(BranchCost::from).collect(),
+        Sint8(libfunc) => sint_libfunc_cost(libfunc),
+        Sint16(libfunc) => sint_libfunc_cost(libfunc),
+        Sint32(libfunc) => sint_libfunc_cost(libfunc),
+        Sint64(libfunc) => sint_libfunc_cost(libfunc),
+        Sint128(libfunc) => s128_libfunc_cost(libfunc),
         Felt252(libfunc) => {
             felt252_libfunc_cost(libfunc).into_iter().map(BranchCost::from).collect()
         }
@@ -337,6 +369,9 @@ pub fn core_libfunc_cost(
                 let n_steps =
                     std::cmp::max(1, info_provider.type_size(&libfunc.ty).try_into().unwrap());
                 vec![ConstCost::steps(n_steps).into()]
+            }
+            BoxConcreteLibfunc::LocalInto(_) => {
+                vec![ConstCost::steps(3).into()]
             }
             BoxConcreteLibfunc::Unbox(_) | BoxConcreteLibfunc::ForwardSnapshot(_) => {
                 vec![ConstCost::default().into()]
@@ -382,7 +417,8 @@ pub fn core_libfunc_cost(
         Struct(
             StructConcreteLibfunc::Construct(_)
             | StructConcreteLibfunc::Deconstruct(_)
-            | StructConcreteLibfunc::SnapshotDeconstruct(_),
+            | StructConcreteLibfunc::SnapshotDeconstruct(_)
+            | StructConcreteLibfunc::BoxedDeconstruct(_),
         ) => {
             vec![ConstCost::default().into()]
         }
@@ -404,6 +440,7 @@ pub fn core_libfunc_cost(
                 vec![DICT_SQUASH_FIXED_COST.into()]
             }
         },
+        Felt252SquashedDict(_) => vec![ConstCost::default().into()],
         Pedersen(libfunc) => match libfunc {
             PedersenConcreteLibfunc::PedersenHash(_) => {
                 vec![BranchCost::Regular {
@@ -418,7 +455,7 @@ pub fn core_libfunc_cost(
                 pre_cost: PreCost::builtin(CostTokenType::Poseidon),
             }],
         },
-        StarkNet(libfunc) => {
+        Starknet(libfunc) => {
             starknet_libfunc_cost_base(libfunc).into_iter().map(BranchCost::from).collect()
         }
         Nullable(libfunc) => match libfunc {
@@ -454,14 +491,14 @@ pub fn core_libfunc_cost(
             CouponConcreteLibfunc::Buy(libfunc) => {
                 vec![BranchCost::FunctionCost {
                     const_cost: ConstCost::default(),
-                    function: libfunc.function.clone(),
+                    function: FunctionCostInfo::new(&libfunc.function),
                     sign: BranchCostSign::Subtract,
                 }]
             }
             CouponConcreteLibfunc::Refund(libfunc) => {
                 vec![BranchCost::FunctionCost {
                     const_cost: ConstCost::default(),
-                    function: libfunc.function.clone(),
+                    function: FunctionCostInfo::new(&libfunc.function),
                     sign: BranchCostSign::Add,
                 }]
             }
@@ -504,7 +541,8 @@ pub fn core_libfunc_cost(
                     .into(),
                 ]
             }
-            BoundedIntConcreteLibfunc::Trim(libfunc) => {
+            BoundedIntConcreteLibfunc::TrimMin(libfunc)
+            | BoundedIntConcreteLibfunc::TrimMax(libfunc) => {
                 let steps: BranchCost =
                     ConstCost::steps(if libfunc.trimmed_value.is_zero() { 1 } else { 2 }).into();
                 vec![steps.clone(), steps]
@@ -534,7 +572,7 @@ pub fn core_libfunc_cost(
                     // Failure.
                     BranchCost::Regular {
                         const_cost: ConstCost::steps(steps),
-                        pre_cost: PreCost(OrderedHashMap::from_iter([
+                        pre_cost: PreCost(CostTokenMap::from_iter([
                             (CostTokenType::AddMod, info.add_offsets.len().into_or_panic()),
                             (CostTokenType::MulMod, info.mul_offsets.len().into_or_panic()),
                         ])),
@@ -542,7 +580,7 @@ pub fn core_libfunc_cost(
                     // Success.
                     BranchCost::Regular {
                         const_cost: ConstCost::steps(steps),
-                        pre_cost: PreCost(OrderedHashMap::from_iter([
+                        pre_cost: PreCost(CostTokenMap::from_iter([
                             (CostTokenType::AddMod, info.add_offsets.len().into_or_panic()),
                             (CostTokenType::MulMod, info.mul_offsets.len().into_or_panic()),
                         ])),
@@ -600,6 +638,22 @@ pub fn core_libfunc_cost(
                 vec![ConstCost::steps(2).into(), ConstCost::steps(2).into()]
             }
         },
+        // TODO(ilya): Add blake token to blake gas cost.
+        Blake(_) => vec![ConstCost::steps(1).into()],
+        Trace(_) => vec![ConstCost::steps(1).into()],
+        QM31(libfunc) => match libfunc {
+            QM31Concrete::Const(_) => vec![ConstCost::default().into()],
+            QM31Concrete::IsZero(_) => vec![ConstCost::steps(1).into(), ConstCost::steps(1).into()],
+            // TODO(orizi): Add qm31 token to gas cost.
+            QM31Concrete::BinaryOperation(_) => vec![ConstCost::steps(1).into()],
+            QM31Concrete::Pack(_) => vec![ConstCost::steps(6).into()],
+            QM31Concrete::Unpack(_) => {
+                vec![ConstCost { steps: 15, holes: 0, range_checks: 5, range_checks96: 0 }.into()]
+            }
+            QM31Concrete::FromM31(_) => vec![ConstCost::default().into()],
+        },
+        UnsafePanic(_) => vec![],
+        DummyFunctionCall(_) => vec![ConstCost::steps(2).into()],
     }
 }
 
@@ -831,7 +885,7 @@ fn u128_libfunc_cost(libfunc: &Uint128Concrete) -> Vec<BranchCost> {
         }
         Uint128Concrete::ByteReverse(_) => vec![BranchCost::Regular {
             const_cost: ConstCost::steps(24),
-            pre_cost: PreCost(OrderedHashMap::from_iter([(CostTokenType::Bitwise, 4)])),
+            pre_cost: PreCost(CostTokenMap::from_iter([(CostTokenType::Bitwise, 4)])),
         }],
     }
 }
@@ -850,12 +904,10 @@ fn u256_libfunc_cost(libfunc: &Uint256Concrete) -> Vec<ConstCost> {
             vec![ConstCost { steps: 30, holes: 0, range_checks: 7, range_checks96: 0 }]
         }
         Uint256Concrete::InvModN(_) => {
-            vec![ConstCost { steps: 40, holes: 0, range_checks: 9, range_checks96: 0 }, ConstCost {
-                steps: 25,
-                holes: 0,
-                range_checks: 7,
-                range_checks96: 0,
-            }]
+            vec![
+                ConstCost { steps: 40, holes: 0, range_checks: 9, range_checks96: 0 },
+                ConstCost { steps: 25, holes: 0, range_checks: 7, range_checks96: 0 },
+            ]
         }
     }
 }
@@ -870,7 +922,7 @@ fn u512_libfunc_cost(libfunc: &Uint512Concrete) -> Vec<ConstCost> {
 }
 
 /// Returns costs for i64/i32/i16/i8 libfuncs.
-fn sint_libfunc_cost<TSintTraits: SintTraits + IsZeroTraits + IntMulTraits>(
+fn sint_libfunc_cost<TSintTraits: SintTraits + IntMulTraits>(
     libfunc: &SintConcrete<TSintTraits>,
 ) -> Vec<BranchCost> {
     match libfunc {
@@ -886,7 +938,6 @@ fn sint_libfunc_cost<TSintTraits: SintTraits + IsZeroTraits + IntMulTraits>(
                 ConstCost { steps: 10, holes: 0, range_checks: 3, range_checks96: 0 }.into(),
             ]
         }
-        SintConcrete::IsZero(_) => vec![ConstCost::steps(1).into(), ConstCost::steps(1).into()],
         SintConcrete::Operation(_) => vec![
             ConstCost { steps: 6, holes: 0, range_checks: 2, range_checks96: 0 }.into(),
             ConstCost { steps: 6, holes: 0, range_checks: 1, range_checks96: 0 }.into(),
@@ -911,9 +962,6 @@ fn s128_libfunc_cost(libfunc: &Sint128Concrete) -> Vec<BranchCost> {
                 ConstCost { steps: 3, holes: 0, range_checks: 1, range_checks96: 0 }.into(),
                 ConstCost { steps: 10, holes: 0, range_checks: 3, range_checks96: 0 }.into(),
             ]
-        }
-        Sint128Concrete::IsZero(_) => {
-            vec![steps(1).into(), steps(1).into()]
         }
         Sint128Concrete::Equal(_) => {
             vec![steps(2).into(), steps(3).into()]

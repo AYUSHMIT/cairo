@@ -39,8 +39,11 @@
 
 /// A `Box` is a type that points to a wrapped value.
 /// It allows for cheap moving around of the value, as its size is small, and may wrap a large size.
-#[derive(Copy, Drop)]
 pub extern type Box<T>;
+
+impl BoxCopy<T, +Copy<T>> of Copy<Box<T>>;
+impl BoxDrop<T, +Drop<T>> of Drop<Box<T>>;
+
 
 // These functions are only exposed in the corelib through the trait below since calling them
 // directly with tuples panics due to auto unpacking of the tuple.
@@ -50,8 +53,7 @@ extern fn unbox<T>(box: Box<T>) -> T nopanic;
 extern fn box_forward_snapshot<T>(value: @Box<T>) -> Box<@T> nopanic;
 
 /// Basic trait for the `Box` type.
-#[generate_trait]
-pub impl BoxImpl<T> of BoxTrait<T> {
+pub trait BoxTrait<T> {
     /// Creates a new `Box` with the given value.
     ///
     /// Allocates space in the boxed segment for the provided value
@@ -62,12 +64,7 @@ pub impl BoxImpl<T> of BoxTrait<T> {
     /// let x = 42;
     /// let boxed_x = BoxTrait::new(x);
     /// ```
-    #[inline]
-    #[must_use]
-    fn new(value: T) -> Box<T> nopanic {
-        into_box(value)
-    }
-
+    fn new(value: T) -> Box<T> nopanic;
     /// Unboxes the given `Box` and returns the wrapped value.
     ///
     /// # Examples
@@ -76,12 +73,7 @@ pub impl BoxImpl<T> of BoxTrait<T> {
     /// let boxed = BoxTrait::new(42);
     /// assert!(boxed.unbox() == 42);
     /// ```
-    #[inline]
-    #[must_use]
-    fn unbox(self: Box<T>) -> T nopanic {
-        unbox(self)
-    }
-
+    fn unbox(self: Box<T>) -> T nopanic;
     /// Converts the given snapshot of a `Box` into a `Box` of a snapshot.
     /// Useful for structures that aren't copyable.
     ///
@@ -92,6 +84,21 @@ pub impl BoxImpl<T> of BoxTrait<T> {
     /// let boxed_snap_arr = snap_boxed_arr.as_snapshot();
     /// let snap_arr = boxed_snap_arr.unbox();
     /// ```
+    fn as_snapshot(self: @Box<T>) -> Box<@T> nopanic;
+}
+pub impl BoxImpl<T> of BoxTrait<T> {
+    #[inline]
+    #[must_use]
+    fn new(value: T) -> Box<T> nopanic {
+        into_box(value)
+    }
+
+    #[inline]
+    #[must_use]
+    fn unbox(self: Box<T>) -> T nopanic {
+        unbox(self)
+    }
+
     #[must_use]
     fn as_snapshot(self: @Box<T>) -> Box<@T> nopanic {
         box_forward_snapshot(self)
@@ -101,7 +108,7 @@ pub impl BoxImpl<T> of BoxTrait<T> {
 impl BoxDeref<T> of crate::ops::Deref<Box<T>> {
     /// The target type after dereferencing.
     type Target = T;
-    /// Takes a `Box<T>`, deferences it and returns a value of type `T`.
+    /// Takes a `Box<T>`, dereferences it and returns a value of type `T`.
     ///
     /// # Examples
     ///

@@ -1,10 +1,12 @@
+use std::sync::Arc;
+
+use cairo_lang_filesystem::ids::SmolStrId;
 use cairo_lang_syntax::node::Token;
 use cairo_lang_syntax::node::ast::{TokenSingleLineComment, TokenWhitespace};
 use cairo_lang_syntax::node::kind::SyntaxKind;
-use test_log::test;
+use cairo_lang_test_utils::test;
 
-use super::Lexer;
-use crate::lexer::LexerTerminal;
+use crate::lexer::{LexerTerminal, tokenize_all};
 use crate::utils::SimpleParserDatabase;
 
 // TODO(spapini): Use snapshot/regression tests.
@@ -71,6 +73,7 @@ fn terminal_kind_to_text(kind: SyntaxKind) -> Vec<&'static str> {
         SyntaxKind::TerminalModEq => vec!["%="],
         SyntaxKind::TerminalDot => vec!["."],
         SyntaxKind::TerminalDotDot => vec![".."],
+        SyntaxKind::TerminalDotDotEq => vec!["..="],
         SyntaxKind::TerminalEq => vec!["="],
         SyntaxKind::TerminalEqEq => vec!["=="],
         SyntaxKind::TerminalGE => vec![">="],
@@ -162,6 +165,7 @@ fn terminal_kinds() -> Vec<SyntaxKind> {
         SyntaxKind::TerminalComma,
         SyntaxKind::TerminalDot,
         SyntaxKind::TerminalDotDot,
+        SyntaxKind::TerminalDotDotEq,
         SyntaxKind::TerminalEq,
         SyntaxKind::TerminalSemicolon,
         SyntaxKind::TerminalQuestionMark,
@@ -203,11 +207,6 @@ fn need_separator(
     {
         return true;
     }
-    if kind0 == SyntaxKind::TerminalShortString
-        && matches!(kind1, SyntaxKind::TerminalIdentifier | SyntaxKind::TerminalUnderscore)
-    {
-        return true;
-    }
     if (text0 == "&" && text1.starts_with('&'))
         || (text0 == "|" && text1.starts_with('|'))
         || (text0 == "/" && text1.starts_with('/'))
@@ -218,7 +217,7 @@ fn need_separator(
         || (text0 == "." && text1.starts_with('.'))
         || (text0 == "-" && (text1.starts_with('>') || text1.starts_with('=')))
         || ((text0 == "+" || text0 == "*" || text0 == "/" || text0 == "%")
-            && text1.starts_with('='))
+            || (text0 == "..") && text1.starts_with('='))
         || (kind0 == SyntaxKind::TerminalLiteralNumber && kind0 == kind1)
     {
         return true;
@@ -267,22 +266,22 @@ fn test_lex_single_token() {
     let db_val = SimpleParserDatabase::default();
     let db = &db_val;
     for (kind, text) in terminal_kind_and_text() {
-        let mut lexer = Lexer::from_text(db, text);
-        let terminal = lexer.next().unwrap();
+        let terminals = tokenize_all(db, (), Arc::from(text));
+        let terminal = &terminals[0];
         // TODO(spapini): Remove calling new_root on non root elements.
         assert_eq!(terminal.kind, kind, "Wrong token kind, with text: \"{text}\".");
-        assert_eq!(terminal.text, text, "Wrong token text.");
+        assert_eq!(terminal.text.long(db), text, "Wrong token text.");
 
         assert_eq!(
-            lexer.next().unwrap().kind,
+            terminals[1].kind,
             SyntaxKind::TerminalEndOfFile,
             "Wrong eof token, with text: \"{text}\"."
         );
-        assert!(lexer.next().is_none(), "Expected end of lexer stream.");
+        assert_eq!(terminals.len(), 2, "Expected exactly 2 terminals (token + EOF).");
     }
 }
 
-#[test]
+#[cairo_lang_proc_macros::test]
 fn test_lex_double_token() {
     let db_val = SimpleParserDatabase::default();
     let db = &db_val;
@@ -294,22 +293,22 @@ fn test_lex_double_token() {
             }
             for separator in separators {
                 let text = format!("{text0}{separator}{text1}");
-                let mut lexer = Lexer::from_text(db, text.as_str());
-
-                let terminal = lexer.next().unwrap();
-                let token_text = terminal.text;
+                let terminals = tokenize_all(db, (), Arc::from(text.as_str()));
+                let terminal = &terminals[0];
+                let token_text = terminal.text(db);
                 assert_eq!(
                     terminal.kind, kind0,
-                    "Wrong first token kind: {}, expected: {kind0}. Text: \"{token_text}\".",
-                    terminal.kind
+                    "Wrong first token kind: {}, expected: {kind0}. Text: \"{}\".",
+                    terminal.kind, token_text
                 );
                 assert_eq!(
                     token_text, text0,
-                    "Wrong first token text, with total text: \"{token_text}\".",
+                    "Wrong first token text, with total text: \"{}\".",
+                    token_text
                 );
 
-                let terminal = lexer.next().unwrap();
-                let token_text = terminal.text;
+                let terminal = &terminals[1];
+                let token_text = terminal.text(db);
                 assert_eq!(
                     terminal.kind, kind1,
                     "Wrong second token kind {}, expected: {kind1}. Text: \"{token_text}\".",
@@ -321,11 +320,15 @@ fn test_lex_double_token() {
                 );
 
                 assert_eq!(
-                    lexer.next().unwrap().kind,
+                    terminals[2].kind,
                     SyntaxKind::TerminalEndOfFile,
                     "Wrong eof token, with text: \"{text}\".",
                 );
-                assert!(lexer.next().is_none(), "Expected end of lexer stream.");
+                assert_eq!(
+                    terminals.len(),
+                    3,
+                    "Expected exactly 3 terminals (token0 + token1 + EOF)."
+                );
             }
         }
     }
@@ -339,19 +342,19 @@ fn test_lex_token_with_trivia() {
         for leading_trivia in trivia_texts() {
             for trailing_trivia in trivia_texts() {
                 let text = format!("{leading_trivia}{expected_token_text} {trailing_trivia}");
-                let mut lexer = Lexer::from_text(db, text.as_str());
-                let terminal = lexer.next().unwrap();
-                let token_text = terminal.text;
+                let terminals = tokenize_all(db, (), Arc::from(text.as_str()));
+                let terminal = &terminals[0];
+                let token_text = terminal.text(db);
                 assert_eq!(terminal.kind, kind, "Wrong token kind, with text: \"{text}\".");
                 assert_eq!(token_text, expected_token_text, "Wrong token text.");
                 // TODO: verify trivia kinds and texts
 
                 assert_eq!(
-                    lexer.next().unwrap().kind,
+                    terminals[1].kind,
                     SyntaxKind::TerminalEndOfFile,
                     "Wrong eof token, with text: \"{text}\"."
                 );
-                assert!(lexer.next().is_none(), "Expected end of lexer stream.");
+                assert_eq!(terminals.len(), 2, "Expected exactly 2 terminals (token + EOF).");
             }
         }
     }
@@ -361,72 +364,85 @@ fn test_lex_token_with_trivia() {
 fn test_cases() {
     let db_val = SimpleParserDatabase::default();
     let db = &db_val;
-    let res: Vec<LexerTerminal> = Lexer::from_text(db, "let x: &T = ` 6; //  5+ 3;").collect();
-    assert_eq!(res, vec![
-        LexerTerminal {
-            text: "let".into(),
-            kind: SyntaxKind::TerminalLet,
-            leading_trivia: vec![],
-            trailing_trivia: vec![TokenWhitespace::new_green(db, " ".into()).into()]
-        },
-        LexerTerminal {
-            text: "x".into(),
-            kind: SyntaxKind::TerminalIdentifier,
-            leading_trivia: vec![],
-            trailing_trivia: vec![]
-        },
-        LexerTerminal {
-            text: ":".into(),
-            kind: SyntaxKind::TerminalColon,
-            leading_trivia: vec![],
-            trailing_trivia: vec![TokenWhitespace::new_green(db, " ".into()).into()]
-        },
-        LexerTerminal {
-            text: "&".into(),
-            kind: SyntaxKind::TerminalAnd,
-            leading_trivia: vec![],
-            trailing_trivia: vec![]
-        },
-        LexerTerminal {
-            text: "T".into(),
-            kind: SyntaxKind::TerminalIdentifier,
-            leading_trivia: vec![],
-            trailing_trivia: vec![TokenWhitespace::new_green(db, " ".into()).into()]
-        },
-        LexerTerminal {
-            text: "=".into(),
-            kind: SyntaxKind::TerminalEq,
-            leading_trivia: vec![],
-            trailing_trivia: vec![TokenWhitespace::new_green(db, " ".into()).into()]
-        },
-        LexerTerminal {
-            text: "`".into(),
-            kind: SyntaxKind::TerminalBadCharacters,
-            leading_trivia: vec![],
-            trailing_trivia: vec![TokenWhitespace::new_green(db, " ".into()).into()]
-        },
-        LexerTerminal {
-            text: "6".into(),
-            kind: SyntaxKind::TerminalLiteralNumber,
-            leading_trivia: vec![],
-            trailing_trivia: vec![]
-        },
-        LexerTerminal {
-            text: ";".into(),
-            kind: SyntaxKind::TerminalSemicolon,
-            leading_trivia: vec![],
-            trailing_trivia: vec![
-                TokenWhitespace::new_green(db, " ".into()).into(),
-                TokenSingleLineComment::new_green(db, "//  5+ 3;".into()).into()
-            ]
-        },
-        LexerTerminal {
-            text: "".into(),
-            kind: SyntaxKind::TerminalEndOfFile,
-            leading_trivia: vec![],
-            trailing_trivia: vec![]
-        }
-    ]);
+    let res = tokenize_all(db, (), Arc::from("let x: &T = ` 6; //  5+ 3;"));
+    assert_eq!(
+        res.into_iter().collect::<Vec<_>>(),
+        vec![
+            LexerTerminal {
+                text: SmolStrId::from(db, "let"),
+                kind: SyntaxKind::TerminalLet,
+                leading_trivia: vec![],
+                trailing_trivia: vec![
+                    TokenWhitespace::new_green(db, SmolStrId::from(db, " ")).into()
+                ]
+            },
+            LexerTerminal {
+                text: SmolStrId::from(db, "x"),
+                kind: SyntaxKind::TerminalIdentifier,
+                leading_trivia: vec![],
+                trailing_trivia: vec![]
+            },
+            LexerTerminal {
+                text: SmolStrId::from(db, ":"),
+                kind: SyntaxKind::TerminalColon,
+                leading_trivia: vec![],
+                trailing_trivia: vec![
+                    TokenWhitespace::new_green(db, SmolStrId::from(db, " ")).into()
+                ]
+            },
+            LexerTerminal {
+                text: SmolStrId::from(db, "&"),
+                kind: SyntaxKind::TerminalAnd,
+                leading_trivia: vec![],
+                trailing_trivia: vec![]
+            },
+            LexerTerminal {
+                text: SmolStrId::from(db, "T"),
+                kind: SyntaxKind::TerminalIdentifier,
+                leading_trivia: vec![],
+                trailing_trivia: vec![
+                    TokenWhitespace::new_green(db, SmolStrId::from(db, " ")).into()
+                ]
+            },
+            LexerTerminal {
+                text: SmolStrId::from(db, "="),
+                kind: SyntaxKind::TerminalEq,
+                leading_trivia: vec![],
+                trailing_trivia: vec![
+                    TokenWhitespace::new_green(db, SmolStrId::from(db, " ")).into()
+                ]
+            },
+            LexerTerminal {
+                text: SmolStrId::from(db, "`"),
+                kind: SyntaxKind::TerminalBadCharacters,
+                leading_trivia: vec![],
+                trailing_trivia: vec![
+                    TokenWhitespace::new_green(db, SmolStrId::from(db, " ")).into()
+                ]
+            },
+            LexerTerminal {
+                text: SmolStrId::from(db, "6"),
+                kind: SyntaxKind::TerminalLiteralNumber,
+                leading_trivia: vec![],
+                trailing_trivia: vec![]
+            },
+            LexerTerminal {
+                text: SmolStrId::from(db, ";"),
+                kind: SyntaxKind::TerminalSemicolon,
+                leading_trivia: vec![],
+                trailing_trivia: vec![
+                    TokenWhitespace::new_green(db, SmolStrId::from(db, " ")).into(),
+                    TokenSingleLineComment::new_green(db, SmolStrId::from(db, "//  5+ 3;")).into()
+                ]
+            },
+            LexerTerminal {
+                text: SmolStrId::from(db, ""),
+                kind: SyntaxKind::TerminalEndOfFile,
+                leading_trivia: vec![],
+                trailing_trivia: vec![]
+            }
+        ]
+    );
 }
 
 #[test]
@@ -435,9 +451,9 @@ fn test_bad_character() {
     let db = &db_val;
 
     let text = "`";
-    let mut lexer = Lexer::from_text(db, text);
-    let terminal = lexer.next().unwrap();
-    let token_text = terminal.text;
+    let terminals = tokenize_all(db, (), Arc::from(text));
+    let terminal = &terminals[0];
+    let token_text = terminal.text(db);
     assert_eq!(
         terminal.kind,
         SyntaxKind::TerminalBadCharacters,
@@ -446,9 +462,9 @@ fn test_bad_character() {
     assert_eq!(token_text, text, "Wrong token text.");
 
     assert_eq!(
-        lexer.next().unwrap().kind,
+        terminals[1].kind,
         SyntaxKind::TerminalEndOfFile,
         "Wrong eof token, with text: \"{text}\"."
     );
-    assert!(lexer.next().is_none(), "Expected end of lexer stream.");
+    assert_eq!(terminals.len(), 2, "Expected exactly 2 terminals (bad char + EOF).");
 }

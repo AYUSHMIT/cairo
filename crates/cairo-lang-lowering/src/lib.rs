@@ -3,6 +3,7 @@
 //! This crate is responsible for handling the lowering phase.
 pub mod add_withdraw_gas;
 pub mod borrow_check;
+pub mod cache;
 pub mod concretize;
 pub mod db;
 pub mod destructs;
@@ -18,6 +19,7 @@ pub mod optimizations;
 pub mod panic;
 pub mod reorganize_blocks;
 pub mod scc;
+pub mod specialization;
 pub mod utils;
 
 #[cfg(test)]

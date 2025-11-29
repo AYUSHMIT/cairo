@@ -24,7 +24,7 @@ The `rustfmt` configuration used by cairo requires a nightly version of Rust.
 You can install the nightly version by running.
 
 ```sh
-rustup install nightly-2024-11-23
+rustup install nightly-2025-11-17
 ```
 
 ## Running Tests
@@ -49,12 +49,11 @@ the `test.cairo` file within the `tests` directory, use the following command:
 cargo run --bin cairo-test -- --single-file tests/test.cairo
 ```
 
-Two scripts are available to run tests within the Compiler repository:
+Three projects within the Compiler repository being tested with cairo test:
 
-1. `scripts/cairo_test.sh`: Executes tests within the `corelib` Cairo project and
-   the `tests/bug_samples` Cairo project.
-2. `scripts/starknet_test.sh`: Runs tests within the `cairo-lang-starknet/cairo_level_tests` Cairo
-   project.
+1. The Cairo core library: Run by running `cargo run --bin cairo-test -- corelib`.
+2. Bug samples: Run by running `cargo run --bin cairo-test -- tests/bug_samples --starknet`.
+3. Starknet features: Run by running: `cargo run --bin cairo-test -- crates/cairo-lang-starknet/cairo_level_tests --starknet`.
 
 ### Running Rust Tests
 
@@ -97,7 +96,7 @@ Please try to create bug reports that are:
 
 - _Reproducible._ Include steps to reproduce the problem.
 - _Specific._ Include as much detail as possible: which version, what environment, etc.
-- _Unique._ Do not duplicate existing opened issues.
+- _Unique._ Do not duplicate existing open issues.
 - _Scoped to a Single Bug._ One bug per report.
 
 **Even better: Submit a pull request with a fix or new feature!**

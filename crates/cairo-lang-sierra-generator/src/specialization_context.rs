@@ -2,7 +2,7 @@ use cairo_lang_diagnostics::ToOption;
 use cairo_lang_sierra::extensions::lib_func::{SierraApChange, SignatureSpecializationContext};
 use cairo_lang_sierra::extensions::type_specialization_context::TypeSpecializationContext;
 use cairo_lang_sierra::program::ConcreteTypeLongId;
-use cairo_lang_utils::{Intern, LookupIntern};
+use salsa::Database;
 
 use crate::db::SierraGenGroup;
 
@@ -10,7 +10,7 @@ use crate::db::SierraGenGroup;
 /// [SignatureSpecializationContext] functionality.
 /// In particular, it can be used when calling
 /// [specialize_signature_by_id](cairo_lang_sierra::extensions::lib_func::GenericLibfuncEx::specialize_signature_by_id).
-pub struct SierraSignatureSpecializationContext<'a>(pub &'a dyn SierraGenGroup);
+pub struct SierraSignatureSpecializationContext<'a>(pub &'a dyn Database);
 
 impl TypeSpecializationContext for SierraSignatureSpecializationContext<'_> {
     fn try_get_type_info(
@@ -26,12 +26,9 @@ impl SignatureSpecializationContext for SierraSignatureSpecializationContext<'_>
         id: cairo_lang_sierra::ids::GenericTypeId,
         generic_args: &[cairo_lang_sierra::program::GenericArg],
     ) -> Option<cairo_lang_sierra::ids::ConcreteTypeId> {
-        Some(
-            crate::db::SierraGeneratorTypeLongId::Regular(
-                ConcreteTypeLongId { generic_id: id, generic_args: generic_args.to_vec() }.into(),
-            )
-            .intern(self.0),
-        )
+        Some(self.0.intern_concrete_type(crate::db::SierraGeneratorTypeLongId::Regular(
+            ConcreteTypeLongId { generic_id: id, generic_args: generic_args.to_vec() }.into(),
+        )))
     }
 
     fn try_get_function_signature(
@@ -44,16 +41,12 @@ impl SignatureSpecializationContext for SierraSignatureSpecializationContext<'_>
             .to_option()
     }
 
-    fn as_type_specialization_context(&self) -> &dyn TypeSpecializationContext {
-        self
-    }
-
     fn try_get_function_ap_change(
         &self,
         function_id: &cairo_lang_sierra::ids::FunctionId,
     ) -> Option<SierraApChange> {
         let function =
-            function_id.lookup_intern(self.0).body(self.0.upcast()).unwrap_or_default().expect(
+            self.0.lookup_sierra_function(function_id).body(self.0).unwrap_or_default().expect(
                 "Internal compiler error: get_function_ap_change() should only be used for user \
                  defined functions.",
             );

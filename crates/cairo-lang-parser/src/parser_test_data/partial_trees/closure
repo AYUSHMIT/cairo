@@ -60,6 +60,7 @@ ExprPath
         │   │   │   ├── lhs (kind: ExprPath) <ignored>
         │   │   │   ├── op (kind: TokenPlus): '+'
         │   │   │   └── rhs (kind: TokenLiteralNumber): '5'
+        │   │   ├── let_else_clause (kind: OptionLetElseClauseEmpty) []
         │   │   └── semicolon (kind: TokenSemicolon): ';'
         │   └── child #1 (kind: StatementExpr)
         │       ├── attributes (kind: AttributeList) []
@@ -76,7 +77,7 @@ test_partial_parser_tree(expect_diagnostics: false)
 
 //! > cairo_code
 fn test() {
-    let expensive_closure =  || -> u32 {
+    let expensive_closure = || -> u32 {
         let x = num + 5;
         x
     };
@@ -110,6 +111,7 @@ ExprPath
         │   │   │   ├── lhs (kind: ExprPath) <ignored>
         │   │   │   ├── op (kind: TokenPlus): '+'
         │   │   │   └── rhs (kind: TokenLiteralNumber): '5'
+        │   │   ├── let_else_clause (kind: OptionLetElseClauseEmpty) []
         │   │   └── semicolon (kind: TokenSemicolon): ';'
         │   └── child #1 (kind: StatementExpr)
         │       ├── attributes (kind: AttributeList) []
@@ -126,7 +128,7 @@ test_partial_parser_tree(expect_diagnostics: false)
 
 //! > cairo_code
 fn test() {
-    let expensive_closure =  || {
+    let expensive_closure = || {
         x
     };
 }
@@ -162,7 +164,7 @@ test_partial_parser_tree(expect_diagnostics: false)
 
 //! > cairo_code
 fn test() {
-    let expensive_closure =  || 3;
+    let expensive_closure = || 3;
 }
 
 //! > top_level_kind
@@ -204,12 +206,12 @@ error: Skipped tokens. Expected: '{'.
     let expensive_closure =  || -> u32 3;
                                        ^^
 
-error: Missing token TerminalLBrace.
+error: Missing token '{'.
  --> dummy_file.cairo:2:42
     let expensive_closure =  || -> u32 3;
                                          ^
 
-error: Missing token TerminalSemicolon.
+error: Missing token ';'.
  --> dummy_file.cairo:2:42
     let expensive_closure =  || -> u32 3;
                                          ^
@@ -250,12 +252,12 @@ error: Skipped tokens. Expected: '{'.
     let expensive_closure =  || nopanic 3;
                                         ^^
 
-error: Missing token TerminalLBrace.
+error: Missing token '{'.
  --> dummy_file.cairo:2:43
     let expensive_closure =  || nopanic 3;
                                           ^
 
-error: Missing token TerminalSemicolon.
+error: Missing token ';'.
  --> dummy_file.cairo:2:43
     let expensive_closure =  || nopanic 3;
                                           ^

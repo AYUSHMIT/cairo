@@ -2,9 +2,11 @@
 name = "tests"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 repository.workspace = true
 license-file.workspace = true
 description = ""
+publish = false
 
 [dev-dependencies]
 assert_matches.workspace = true
@@ -22,10 +24,10 @@ cairo-lang-sierra = { path = "../crates/cairo-lang-sierra" }
 cairo-lang-sierra-gas = { path = "../crates/cairo-lang-sierra-gas" }
 cairo-lang-sierra-generator = { path = "../crates/cairo-lang-sierra-generator" }
 cairo-lang-sierra-to-casm = { path = "../crates/cairo-lang-sierra-to-casm", features = ["testing"] }
+cairo-lang-sierra-type-size = { path = "../crates/cairo-lang-sierra-type-size", version = "~2.14.0" }
 cairo-lang-syntax = { path = "../crates/cairo-lang-syntax" }
 cairo-lang-test-utils = { path = "../crates/cairo-lang-test-utils", features = ["testing"] }
-cairo-lang-utils = { path = "../crates/cairo-lang-utils" }
-env_logger.workspace = true
+cairo-lang-utils = { path = "../crates/cairo-lang-utils", features = ["tracing"] }
 itertools = { workspace = true, default-features = true }
 log.workspace = true
 num-bigint = { workspace = true, default-features = true }
@@ -33,7 +35,7 @@ pretty_assertions.workspace = true
 rstest.workspace = true
 salsa.workspace = true
 starknet-types-core.workspace = true
-test-log.workspace = true
+tracing.workspace = true
 
 [[test]]
 name = "examples_test"

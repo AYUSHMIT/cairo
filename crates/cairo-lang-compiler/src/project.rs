@@ -1,14 +1,16 @@
 use std::ffi::OsStr;
 use std::path::Path;
 
+use cairo_lang_defs::db::DefsGroup;
 use cairo_lang_defs::ids::ModuleId;
 use cairo_lang_filesystem::db::{
-    CORELIB_CRATE_NAME, CrateConfiguration, CrateIdentifier, CrateSettings, FilesGroupEx,
+    CORELIB_CRATE_NAME, CrateConfiguration, CrateIdentifier, CrateSettings, FilesGroup,
 };
-use cairo_lang_filesystem::ids::{CrateId, CrateLongId, Directory};
+use cairo_lang_filesystem::ids::{CrateId, CrateInput, CrateLongId, Directory, SmolStrId};
+use cairo_lang_filesystem::{override_file_content, set_crate_config};
 pub use cairo_lang_project::*;
-use cairo_lang_semantic::db::SemanticGroup;
 use cairo_lang_utils::Intern;
+use salsa::Database;
 
 #[derive(thiserror::Error, Debug)]
 pub enum ProjectError {
@@ -22,12 +24,12 @@ pub enum ProjectError {
     LoadProjectError(DeserializationError),
 }
 
-/// Setup to 'db' to compile the file at the given path.
+/// Sets up the DB to compile the file at the given path.
 /// Returns the id of the generated crate.
 pub fn setup_single_file_project(
-    db: &mut dyn SemanticGroup,
+    db: &mut dyn Database,
     path: &Path,
-) -> Result<CrateId, ProjectError> {
+) -> Result<CrateInput, ProjectError> {
     match path.extension().and_then(OsStr::to_str) {
         Some("cairo") => (),
         _ => {
@@ -43,62 +45,66 @@ pub fn setup_single_file_project(
     let file_stem = path.file_stem().and_then(OsStr::to_str).ok_or_else(bad_path_err)?;
     if file_stem == "lib" {
         let crate_name = file_dir.to_str().ok_or_else(bad_path_err)?;
-        let crate_id = CrateId::plain(db, crate_name);
-        db.set_crate_config(
+        let crate_id = CrateId::plain(db, SmolStrId::from(db, crate_name));
+        set_crate_config!(
+            db,
             crate_id,
-            Some(CrateConfiguration::default_for_root(Directory::Real(file_dir.to_path_buf()))),
+            Some(CrateConfiguration::default_for_root(Directory::Real(file_dir.to_path_buf())))
         );
-        Ok(crate_id)
+        let crate_id = CrateId::plain(db, SmolStrId::from(db, crate_name));
+        Ok(crate_id.long(db).clone().into_crate_input(db))
     } else {
         // If file_stem is not lib, create a fake lib file.
-        let crate_id = CrateId::plain(db, file_stem);
-        db.set_crate_config(
+        let crate_id = CrateId::plain(db, SmolStrId::from(db, file_stem));
+        set_crate_config!(
+            db,
             crate_id,
-            Some(CrateConfiguration::default_for_root(Directory::Real(file_dir.to_path_buf()))),
+            Some(CrateConfiguration::default_for_root(Directory::Real(file_dir.to_path_buf())))
         );
-
+        let crate_id = CrateId::plain(db, SmolStrId::from(db, file_stem));
         let module_id = ModuleId::CrateRoot(crate_id);
         let file_id = db.module_main_file(module_id).unwrap();
-        db.as_files_group_mut()
-            .override_file_content(file_id, Some(format!("mod {file_stem};").into()));
-        Ok(crate_id)
+        override_file_content!(db, file_id, Some(format!("mod {file_stem};").into()));
+        let crate_id = CrateId::plain(db, SmolStrId::from(db, file_stem));
+        Ok(crate_id.long(db).clone().into_crate_input(db))
     }
 }
 
-/// Updates the crate roots from a ProjectConfig object.
-pub fn update_crate_roots_from_project_config(db: &mut dyn SemanticGroup, config: &ProjectConfig) {
+/// Updates the crate roots from a `ProjectConfig` object.
+pub fn update_crate_roots_from_project_config(db: &mut dyn Database, config: &ProjectConfig) {
     for (crate_identifier, directory_path) in config.content.crate_roots.iter() {
         let root = Directory::Real(config.absolute_crate_root(directory_path));
         update_crate_root(db, config, crate_identifier, root);
     }
 }
 
-/// Updates a single crate root from a ProjectConfig.
-/// If the crate defines settings in the config, it will be used.
-/// Crate is identified by name and the root directory.
+/// Updates a single crate root from a `ProjectConfig`.
+/// If the crate defines settings in the config, they will be used.
+/// The crate is identified by name and root directory.
 pub fn update_crate_root(
-    db: &mut dyn SemanticGroup,
+    db: &mut dyn Database,
     config: &ProjectConfig,
     crate_identifier: &CrateIdentifier,
-    root: Directory,
+    root: Directory<'_>,
 ) {
     let (crate_id, crate_settings) = get_crate_id_and_settings(db, crate_identifier, config);
-    db.set_crate_config(
+    set_crate_config!(
+        db,
         crate_id,
-        Some(CrateConfiguration { root, settings: crate_settings.clone() }),
+        Some(CrateConfiguration { root, settings: crate_settings.clone(), cache_file: None })
     );
 }
 
-/// Setup the 'db' to compile the project in the given path.
-/// The path can be either a directory with cairo project file or a .cairo file.
-/// Returns the ids of the project crates.
-pub fn setup_project(
-    db: &mut dyn SemanticGroup,
-    path: &Path,
-) -> Result<Vec<CrateId>, ProjectError> {
+/// Sets up the DB to compile the project at the given path.
+/// The path can be either a directory with a Cairo project file or a `.cairo` file.
+/// Returns the IDs of the project crates.
+pub fn setup_project(db: &mut dyn Database, path: &Path) -> Result<Vec<CrateInput>, ProjectError> {
     if path.is_dir() {
         let config = ProjectConfig::from_directory(path).map_err(ProjectError::LoadProjectError)?;
-        let main_crate_ids = get_main_crate_ids_from_project(db, &config);
+        let main_crate_ids: Vec<_> = get_main_crate_ids_from_project(db, &config)
+            .into_iter()
+            .map(|id| id.long(db).clone().into_crate_input(db))
+            .collect();
         update_crate_roots_from_project_config(db, &config);
         Ok(main_crate_ids)
     } else {
@@ -122,10 +128,10 @@ pub fn check_compiler_path(single_file: bool, path: &Path) -> anyhow::Result<()>
     Ok(())
 }
 
-pub fn get_main_crate_ids_from_project(
-    db: &mut dyn SemanticGroup,
+pub fn get_main_crate_ids_from_project<'db>(
+    db: &'db dyn Database,
     config: &ProjectConfig,
-) -> Vec<CrateId> {
+) -> Vec<CrateId<'db>> {
     config
         .content
         .crate_roots
@@ -134,18 +140,18 @@ pub fn get_main_crate_ids_from_project(
         .collect()
 }
 
-fn get_crate_id_and_settings<'a>(
-    db: &mut dyn SemanticGroup,
+fn get_crate_id_and_settings<'db, 'a>(
+    db: &'db dyn Database,
     crate_identifier: &CrateIdentifier,
     config: &'a ProjectConfig,
-) -> (CrateId, &'a CrateSettings) {
+) -> (CrateId<'db>, &'a CrateSettings) {
     let crate_settings = config.content.crates_config.get(crate_identifier);
     let name = crate_settings.name.clone().unwrap_or_else(|| crate_identifier.clone().into());
     // It has to be done due to how `CrateId::core` works.
     let discriminator =
         if name == CORELIB_CRATE_NAME { None } else { Some(crate_identifier.clone().into()) };
 
-    let crate_id = CrateLongId::Real { name, discriminator }.intern(db);
+    let crate_id = CrateLongId::Real { name: SmolStrId::from(db, name), discriminator }.intern(db);
 
     (crate_id, crate_settings)
 }

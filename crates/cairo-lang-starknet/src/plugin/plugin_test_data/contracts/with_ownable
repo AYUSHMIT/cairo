@@ -9,9 +9,9 @@ cairo_level_tests/contracts/with_ownable.cairo
 //! > generated_cairo_code
 #[starknet::contract]
 mod ownable_balance {
+    use starknet::ContractAddress;
     use starknet::storage::{StoragePointerReadAccess, StoragePointerWriteAccess};
     use crate::components::ownable::ownable as ownable_comp;
-    use starknet::ContractAddress;
     #[storage]
     struct Storage {
         #[substorage(v0)]
@@ -96,10 +96,10 @@ pub struct ContractState {
 }
 
 impl ContractStateDrop of Drop<ContractState> {}
- 
-impl ContractStateDeref of core::ops::SnapshotDeref<ContractState> {
+
+impl ContractStateDeref of core::ops::Deref<@ContractState> {
     type Target = starknet::storage::FlattenedStorage<Storage>;
-    fn snapshot_deref(self: @ContractState) -> starknet::storage::FlattenedStorage<Storage> {
+    fn deref(self: @ContractState) -> starknet::storage::FlattenedStorage<Storage> {
         starknet::storage::FlattenedStorage {}
     }
 }
@@ -134,7 +134,9 @@ impl ContractStateTransfer of
 fn __wrapper__OwnableBalanceImpl__constructor(mut data: Span::<felt252>) -> Span::<felt252> {
     core::internal::require_implicit::<System>();
     core::internal::revoke_ap_tracking();
-    core::option::OptionTraitImpl::expect(core::gas::withdraw_gas(), 'Out of gas');
+    let Some(_) = core::gas::withdraw_gas() else {
+        core::panic_with_felt252('Out of gas');
+    };
     let __arg_owner = core::option::OptionTraitImpl::expect(
         core::serde::Serde::<ContractAddress>::deserialize(ref data),
         'Failed to deserialize param #1'
@@ -144,9 +146,9 @@ fn __wrapper__OwnableBalanceImpl__constructor(mut data: Span::<felt252>) -> Span
         'Failed to deserialize param #2'
     );
     assert(core::array::SpanTrait::is_empty(data), 'Input too long for arguments');
-    core::option::OptionTraitImpl::expect(
-        core::gas::withdraw_gas_all(core::gas::get_builtin_costs()), 'Out of gas',
-    );
+    let Some(_) = core::gas::withdraw_gas_all(core::gas::get_builtin_costs()) else {
+        core::panic_with_felt252('Out of gas');
+    };
     let mut contract_state = unsafe_new_contract_state();
     OwnableBalanceImpl::constructor(ref contract_state, __arg_owner, __arg_initial);
     let mut arr = ArrayTrait::new();
@@ -160,12 +162,14 @@ fn __wrapper__OwnableBalanceImpl__constructor(mut data: Span::<felt252>) -> Span
 fn __wrapper__OwnableBalanceImpl__get_balance(mut data: Span::<felt252>) -> Span::<felt252> {
     core::internal::require_implicit::<System>();
     core::internal::revoke_ap_tracking();
-    core::option::OptionTraitImpl::expect(core::gas::withdraw_gas(), 'Out of gas');
+    let Some(_) = core::gas::withdraw_gas() else {
+        core::panic_with_felt252('Out of gas');
+    };
     
     assert(core::array::SpanTrait::is_empty(data), 'Input too long for arguments');
-    core::option::OptionTraitImpl::expect(
-        core::gas::withdraw_gas_all(core::gas::get_builtin_costs()), 'Out of gas',
-    );
+    let Some(_) = core::gas::withdraw_gas_all(core::gas::get_builtin_costs()) else {
+        core::panic_with_felt252('Out of gas');
+    };
     let mut contract_state = unsafe_new_contract_state();
     let res = OwnableBalanceImpl::get_balance(@contract_state, );
     let mut arr = ArrayTrait::new();
@@ -180,15 +184,17 @@ fn __wrapper__OwnableBalanceImpl__get_balance(mut data: Span::<felt252>) -> Span
 fn __wrapper__OwnableBalanceImpl__set_balance(mut data: Span::<felt252>) -> Span::<felt252> {
     core::internal::require_implicit::<System>();
     core::internal::revoke_ap_tracking();
-    core::option::OptionTraitImpl::expect(core::gas::withdraw_gas(), 'Out of gas');
+    let Some(_) = core::gas::withdraw_gas() else {
+        core::panic_with_felt252('Out of gas');
+    };
     let __arg_new_balance = core::option::OptionTraitImpl::expect(
         core::serde::Serde::<u128>::deserialize(ref data),
         'Failed to deserialize param #1'
     );
     assert(core::array::SpanTrait::is_empty(data), 'Input too long for arguments');
-    core::option::OptionTraitImpl::expect(
-        core::gas::withdraw_gas_all(core::gas::get_builtin_costs()), 'Out of gas',
-    );
+    let Some(_) = core::gas::withdraw_gas_all(core::gas::get_builtin_costs()) else {
+        core::panic_with_felt252('Out of gas');
+    };
     let mut contract_state = unsafe_new_contract_state();
     OwnableBalanceImpl::set_balance(ref contract_state, __arg_new_balance);
     let mut arr = ArrayTrait::new();
@@ -198,12 +204,15 @@ fn __wrapper__OwnableBalanceImpl__set_balance(mut data: Span::<felt252>) -> Span
 }
 
 
+#[doc(hidden)]
 pub mod __external {
     pub use super::__wrapper__OwnableBalanceImpl__get_balance as get_balance;
     pub use super::__wrapper__OwnableBalanceImpl__set_balance as set_balance;
 }
+#[doc(hidden)]
 pub mod __l1_handler {
 }
+#[doc(hidden)]
 pub mod __constructor {
     pub use super::__wrapper__OwnableBalanceImpl__constructor as constructor;
 }
@@ -245,7 +254,7 @@ impl HasComponentImpl_ownable_comp of ownable_comp::HasComponent<ContractState> 
         ContractStateEventEmitter::emit(ref contract, Event::Ownable(event));
     }
 }
-impl EventDrop of core::traits::Drop::<Event>;
+impl EventDrop<> of core::traits::Drop::<Event>;
 impl EventIsEvent of starknet::Event<Event> {
     fn append_keys_and_data(
         self: @Event, ref keys: Array<felt252>, ref data: Array<felt252>
@@ -285,15 +294,19 @@ impl EventOwnableIntoEvent of Into<ownable_comp::Event, Event> {
         #[external(v0)]
         fn set_balance(ref self: ContractState, new_balance: u128);
     }
-impl StorageStorageBaseDrop of core::traits::Drop::<StorageStorageBase>;
-impl StorageStorageBaseCopy of core::traits::Copy::<StorageStorageBase>;
-impl StorageStorageBaseMutDrop of core::traits::Drop::<StorageStorageBaseMut>;
-impl StorageStorageBaseMutCopy of core::traits::Copy::<StorageStorageBaseMut>;
+#[doc(hidden)]
+impl StorageStorageBaseDrop<> of core::traits::Drop::<StorageStorageBase>;
+#[doc(hidden)]
+impl StorageStorageBaseCopy<> of core::traits::Copy::<StorageStorageBase>;
+#[doc(hidden)]
+impl StorageStorageBaseMutDrop<> of core::traits::Drop::<StorageStorageBaseMut>;
+#[doc(hidden)]
+impl StorageStorageBaseMutCopy<> of core::traits::Copy::<StorageStorageBaseMut>;
 }
 
+    use starknet::ContractAddress;
     use starknet::storage::{StoragePointerReadAccess, StoragePointerWriteAccess};
     use crate::components::ownable::ownable as ownable_comp;
-    use starknet::ContractAddress;
     #[storage]
     struct Storage {
         #[substorage(v0)]
@@ -378,10 +391,10 @@ pub struct ContractState {
 }
 
 impl ContractStateDrop of Drop<ContractState> {}
- 
-impl ContractStateDeref of core::ops::SnapshotDeref<ContractState> {
+
+impl ContractStateDeref of core::ops::Deref<@ContractState> {
     type Target = starknet::storage::FlattenedStorage<Storage>;
-    fn snapshot_deref(self: @ContractState) -> starknet::storage::FlattenedStorage<Storage> {
+    fn deref(self: @ContractState) -> starknet::storage::FlattenedStorage<Storage> {
         starknet::storage::FlattenedStorage {}
     }
 }
@@ -416,7 +429,9 @@ impl ContractStateTransfer of
 fn __wrapper__OwnableBalanceImpl__constructor(mut data: Span::<felt252>) -> Span::<felt252> {
     core::internal::require_implicit::<System>();
     core::internal::revoke_ap_tracking();
-    core::option::OptionTraitImpl::expect(core::gas::withdraw_gas(), 'Out of gas');
+    let Some(_) = core::gas::withdraw_gas() else {
+        core::panic_with_felt252('Out of gas');
+    };
     let __arg_owner = core::option::OptionTraitImpl::expect(
         core::serde::Serde::<ContractAddress>::deserialize(ref data),
         'Failed to deserialize param #1'
@@ -426,9 +441,9 @@ fn __wrapper__OwnableBalanceImpl__constructor(mut data: Span::<felt252>) -> Span
         'Failed to deserialize param #2'
     );
     assert(core::array::SpanTrait::is_empty(data), 'Input too long for arguments');
-    core::option::OptionTraitImpl::expect(
-        core::gas::withdraw_gas_all(core::gas::get_builtin_costs()), 'Out of gas',
-    );
+    let Some(_) = core::gas::withdraw_gas_all(core::gas::get_builtin_costs()) else {
+        core::panic_with_felt252('Out of gas');
+    };
     let mut contract_state = unsafe_new_contract_state();
     OwnableBalanceImpl::constructor(ref contract_state, __arg_owner, __arg_initial);
     let mut arr = ArrayTrait::new();
@@ -442,12 +457,14 @@ fn __wrapper__OwnableBalanceImpl__constructor(mut data: Span::<felt252>) -> Span
 fn __wrapper__OwnableBalanceImpl__get_balance(mut data: Span::<felt252>) -> Span::<felt252> {
     core::internal::require_implicit::<System>();
     core::internal::revoke_ap_tracking();
-    core::option::OptionTraitImpl::expect(core::gas::withdraw_gas(), 'Out of gas');
+    let Some(_) = core::gas::withdraw_gas() else {
+        core::panic_with_felt252('Out of gas');
+    };
     
     assert(core::array::SpanTrait::is_empty(data), 'Input too long for arguments');
-    core::option::OptionTraitImpl::expect(
-        core::gas::withdraw_gas_all(core::gas::get_builtin_costs()), 'Out of gas',
-    );
+    let Some(_) = core::gas::withdraw_gas_all(core::gas::get_builtin_costs()) else {
+        core::panic_with_felt252('Out of gas');
+    };
     let mut contract_state = unsafe_new_contract_state();
     let res = OwnableBalanceImpl::get_balance(@contract_state, );
     let mut arr = ArrayTrait::new();
@@ -462,15 +479,17 @@ fn __wrapper__OwnableBalanceImpl__get_balance(mut data: Span::<felt252>) -> Span
 fn __wrapper__OwnableBalanceImpl__set_balance(mut data: Span::<felt252>) -> Span::<felt252> {
     core::internal::require_implicit::<System>();
     core::internal::revoke_ap_tracking();
-    core::option::OptionTraitImpl::expect(core::gas::withdraw_gas(), 'Out of gas');
+    let Some(_) = core::gas::withdraw_gas() else {
+        core::panic_with_felt252('Out of gas');
+    };
     let __arg_new_balance = core::option::OptionTraitImpl::expect(
         core::serde::Serde::<u128>::deserialize(ref data),
         'Failed to deserialize param #1'
     );
     assert(core::array::SpanTrait::is_empty(data), 'Input too long for arguments');
-    core::option::OptionTraitImpl::expect(
-        core::gas::withdraw_gas_all(core::gas::get_builtin_costs()), 'Out of gas',
-    );
+    let Some(_) = core::gas::withdraw_gas_all(core::gas::get_builtin_costs()) else {
+        core::panic_with_felt252('Out of gas');
+    };
     let mut contract_state = unsafe_new_contract_state();
     OwnableBalanceImpl::set_balance(ref contract_state, __arg_new_balance);
     let mut arr = ArrayTrait::new();
@@ -480,12 +499,15 @@ fn __wrapper__OwnableBalanceImpl__set_balance(mut data: Span::<felt252>) -> Span
 }
 
 
+#[doc(hidden)]
 pub mod __external {
     pub use super::__wrapper__OwnableBalanceImpl__get_balance as get_balance;
     pub use super::__wrapper__OwnableBalanceImpl__set_balance as set_balance;
 }
+#[doc(hidden)]
 pub mod __l1_handler {
 }
+#[doc(hidden)]
 pub mod __constructor {
     pub use super::__wrapper__OwnableBalanceImpl__constructor as constructor;
 }
@@ -527,7 +549,7 @@ impl HasComponentImpl_ownable_comp of ownable_comp::HasComponent<ContractState> 
         ContractStateEventEmitter::emit(ref contract, Event::Ownable(event));
     }
 }
-impl EventDrop of core::traits::Drop::<Event>;
+impl EventDrop<> of core::traits::Drop::<Event>;
 impl EventIsEvent of starknet::Event<Event> {
     fn append_keys_and_data(
         self: @Event, ref keys: Array<felt252>, ref data: Array<felt252>
@@ -567,9 +589,13 @@ impl EventOwnableIntoEvent of Into<ownable_comp::Event, Event> {
         #[external(v0)]
         fn set_balance(ref self: ContractState, new_balance: u128);
     }
-impl StorageStorageBaseDrop of core::traits::Drop::<StorageStorageBase>;
-impl StorageStorageBaseCopy of core::traits::Copy::<StorageStorageBase>;
-impl StorageStorageBaseMutDrop of core::traits::Drop::<StorageStorageBaseMut>;
-impl StorageStorageBaseMutCopy of core::traits::Copy::<StorageStorageBaseMut>;
+#[doc(hidden)]
+impl StorageStorageBaseDrop<> of core::traits::Drop::<StorageStorageBase>;
+#[doc(hidden)]
+impl StorageStorageBaseCopy<> of core::traits::Copy::<StorageStorageBase>;
+#[doc(hidden)]
+impl StorageStorageBaseMutDrop<> of core::traits::Drop::<StorageStorageBaseMut>;
+#[doc(hidden)]
+impl StorageStorageBaseMutCopy<> of core::traits::Copy::<StorageStorageBaseMut>;
 
 //! > expected_diagnostics

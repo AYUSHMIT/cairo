@@ -11,14 +11,12 @@ trait FirstInterface<T> {
 mod toto {
     #[storage]
     struct Storage {}
-
     use super::{FirstInterfaceDispatcher, FirstInterfaceDispatcherTrait};
 
     #[external(v0)]
     fn test_mint_and_unbox(self: @ContractState) {
-        let contract = FirstInterfaceDispatcher {
-            contract_address: starknet::contract_address_const::<5>(),
-        };
+        const CONTRACT_ADDRESS: starknet::ContractAddress = 5_felt252.try_into().unwrap();
+        let contract = FirstInterfaceDispatcher { contract_address: CONTRACT_ADDRESS };
 
         contract.balance_of();
         contract.toto(array![contract.contract_address]);

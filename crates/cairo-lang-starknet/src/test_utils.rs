@@ -7,8 +7,6 @@ use cairo_lang_compiler::diagnostics::DiagnosticsReporter;
 use cairo_lang_compiler::project::ProjectConfig;
 use cairo_lang_filesystem::db::FilesGroup;
 use cairo_lang_filesystem::ids::Directory;
-use cairo_lang_lowering::utils::InliningStrategy;
-use cairo_lang_starknet_classes::allowed_libfuncs::BUILTIN_ALL_LIBFUNCS_LIST;
 use cairo_lang_starknet_classes::contract_class::ContractClass;
 use cairo_lang_test_utils::test_lock;
 use itertools::Itertools;
@@ -29,7 +27,7 @@ pub static SHARED_DB: LazyLock<Mutex<RootDatabase>> = LazyLock::new(|| {
     Mutex::new(
         RootDatabase::builder()
             .detect_corelib()
-            .with_plugin_suite(starknet_plugin_suite())
+            .with_default_plugin_suite(starknet_plugin_suite())
             .build()
             .unwrap(),
     )
@@ -47,7 +45,7 @@ pub static SHARED_DB_WITH_CONTRACTS: LazyLock<Mutex<RootDatabase>> = LazyLock::n
             .with_project_config(
                 ProjectConfig::from_directory(Path::new(CONTRACTS_CRATE_DIR)).unwrap(),
             )
-            .with_plugin_suite(starknet_plugin_suite())
+            .with_default_plugin_suite(starknet_plugin_suite())
             .build()
             .unwrap(),
     )
@@ -68,20 +66,25 @@ pub fn get_test_contract(example_file_name: &str) -> ContractClass {
         .collect_vec();
     let [(contracts_crate_id, _)] = contracts_crate.as_slice() else {
         panic!(
-            "Expected exactly one crate with name starting with {}, found: {:?}",
-            CONTRACTS_CRATE_DIR, contracts_crate
+            "Expected exactly one crate with name starting with {CONTRACTS_CRATE_DIR}, found: \
+             {contracts_crate:?}"
         );
     };
     let main_crate_ids = vec![**contracts_crate_id];
+    let crate_input = contracts_crate_id.long(&db).clone().into_crate_input(&db);
+    let main_crate_inputs = vec![crate_input];
     let diagnostics_reporter =
-        DiagnosticsReporter::default().with_crates(&main_crate_ids).allow_warnings();
-    compile_contract_in_prepared_db(&db, Some(example_file_name), main_crate_ids, CompilerConfig {
-        replace_ids: true,
-        allowed_libfuncs_list_name: Some(BUILTIN_ALL_LIBFUNCS_LIST.to_string()),
-        diagnostics_reporter,
-        add_statements_functions: false,
-        add_statements_code_locations: false,
-        inlining_strategy: InliningStrategy::Default,
-    })
+        DiagnosticsReporter::default().with_crates(&main_crate_inputs).allow_warnings();
+    compile_contract_in_prepared_db(
+        &db,
+        Some(example_file_name),
+        main_crate_ids,
+        CompilerConfig {
+            replace_ids: true,
+            diagnostics_reporter,
+            add_statements_functions: false,
+            add_statements_code_locations: false,
+        },
+    )
     .expect("compile_path failed")
 }
